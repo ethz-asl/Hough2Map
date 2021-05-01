@@ -52,7 +52,7 @@ sudo apt install libomp-dev --yes
 
 ```
 ### Clone and build
-Pay special attention to the install instructions of the [[rpg_dvs_ros](https://github.com/uzh-rpg/rpg_dvs_ros)] package.
+Pay special attention to the install instructions of the [rpg_dvs_ros](https://github.com/uzh-rpg/rpg_dvs_ros) package.
 
 ```bash
 cd ~/catkin_ws/src/
