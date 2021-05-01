@@ -1,0 +1,9 @@
+[submodule "rpg_dvs_ros"]
+	path = dependencies/rpg_dvs_ros
+	url = https://github.com/uzh-rpg/rpg_dvs_ros
+[submodule "drivers"]
+	path = dependencies/drivers
+	url = https://gitlab.com/autowarefoundation/autoware.ai/drivers.git
+[submodule "maplab"]
+	path = dependencies/maplab
+	url = https://github.com/ethz-asl/maplab
