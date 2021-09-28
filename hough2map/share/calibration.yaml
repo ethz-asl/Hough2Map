@@ -1,4 +1,3 @@
-%YAML:1.0
 cam0:
   cam_overlaps: []
   camera_model: pinhole
