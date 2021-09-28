@@ -9,7 +9,10 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -Wall")
 find_package(OpenMP)
 
 
-cs_add_executable(${PROJECT_NAME} src/node.cpp)
+cs_add_executable(${PROJECT_NAME}
+  src/detector.cpp
+  src/node.cpp
+)
 
 cs_add_library(${PROJECT_NAME}_lib
   src/detector.cpp
