@@ -140,6 +140,9 @@ Detector::~Detector() {
   }
 }
 
+const int Detector::kHough1AngularResolution;
+const int Detector::kHough1RadiusResolution;
+
 void Detector::initializeTransformationMatrices() {
 
   // Initialize transformation matrices.
