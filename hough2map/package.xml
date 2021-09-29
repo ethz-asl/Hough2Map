@@ -23,4 +23,5 @@
   <depend>glog_catkin</depend>
   <depend>gflags_catkin</depend>
   <depend>custom_msgs</depend>
+  <depend>dvs_renderer</depend>
 </package>
