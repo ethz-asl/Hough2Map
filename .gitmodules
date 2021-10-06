@@ -13,6 +13,15 @@
 [submodule "dependencies/drivers"]
 	path = dependencies/drivers
 	url = https://gitlab.com/autowarefoundation/autoware.ai/drivers.git
-[submodule "dependencies/maplab"]
-	path = dependencies/maplab
-	url = https://github.com/ethz-asl/maplab
+[submodule "dependencies/opencv3_catkin"]
+	path = dependencies/opencv3_catkin
+	url = https://github.com/ethz-asl/opencv3_catkin.git
+[submodule "dependencies/eigen_catkin"]
+	path = dependencies/eigen_catkin
+	url = https://github.com/ethz-asl/eigen_catkin
+[submodule "dependencies/glog_catkin"]
+	path = dependencies/glog_catkin
+	url = https://github.com/ethz-asl/glog_catkin
+[submodule "dependencies/gflags_catkin"]
+	path = dependencies/gflags_catkin
+	url = https://github.com/ethz-asl/gflags_catkin
