@@ -22,3 +22,6 @@
 [submodule "dependencies/gflags_catkin"]
 	path = dependencies/gflags_catkin
 	url = https://github.com/ethz-asl/gflags_catkin
+[submodule "dependencies/catkin_simple"]
+	path = dependencies/catkin_simple
+	url = https://github.com/catkin/catkin_simple.git
