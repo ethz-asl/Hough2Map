@@ -10,7 +10,6 @@ find_package(OpenMP)
 
 
 cs_add_executable(${PROJECT_NAME}
-  src/detector.cpp
   src/node.cpp
 )
 
