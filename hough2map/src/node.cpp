@@ -12,13 +12,15 @@ int main(int argc, char *argv[]) {
   ros::init(argc, argv, "hough2map");
   ros::NodeHandle nh, nh_private("~");
 
+  image_transport::ImageTransport img_pipe(nh);
+
   // Reading RosParams and storing as gflags.
   ros_common::parseGflagsFromRosParams(argv[0], nh_private);
 
   // Create pole detector.
   ROS_INFO("Using Hough detector.");
 
-  hough2map::Detector detector(nh, nh_private);
+  hough2map::Detector detector(nh, nh_private, img_pipe);
 
   ros::spin();
 

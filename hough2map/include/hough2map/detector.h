@@ -9,9 +9,12 @@
 #include <geometry_msgs/PoseArray.h>
 #include <geometry_msgs/Quaternion.h>
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
+#include <visualization_msgs/Marker.h>
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/image_encodings.h>
+
+#include "image_transport/image_transport.h"
 
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/convert.h>
@@ -38,7 +41,7 @@ namespace hough2map {
 class Detector {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private);
+  Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private, const image_transport::ImageTransport &img_pipe);
   virtual ~Detector();
 
 protected:
@@ -132,6 +135,10 @@ private:
   Eigen::MatrixXf undist_map_x_;
   Eigen::MatrixXf undist_map_y_;
 
+  // Poles
+  visualization_msgs::Marker pole_marker_;
+  int pole_count_;
+
   // ROS interface.
 
   ros::NodeHandle nh_;
@@ -145,6 +152,13 @@ private:
   ros::Subscriber GPS_vel_;
 
   ros::Subscriber odom_pose_sub_;
+
+  // Viz Helpers
+  image_transport::ImageTransport img_pipe_;
+
+  image_transport::Publisher hough1_img_pub_;
+  image_transport::Publisher hough2_img_pub_;
+  ros::Publisher pole_viz_pub_;
 
   /* Function definitions. */
 

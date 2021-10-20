@@ -18,6 +18,8 @@ DEFINE_int32(event_subsample_factor, 1,
              "Subsample Events by a constant factor");
 DEFINE_bool(show_lines_in_video, false,
             "Plot detected lines in the video stream");
+DEFINE_bool(show_markers, false,
+            "Plot detected lines in the video stream");
 DEFINE_bool(lines_output, false, "Output detected lines to a file");
 DEFINE_bool(map_output, false, "Export detected poles to file");
 DEFINE_bool(display_2nd_hough_space, false,
@@ -50,8 +52,8 @@ DEFINE_double(
     "them to be confirmed as a pole detection. Value is in pixels sqared.");
 
 namespace hough2map {
-Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private)
-    : nh_(nh), nh_private_(nh_private) {
+Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private, const image_transport::ImageTransport &img_pipe)
+    : nh_(nh), nh_private_(nh_private), img_pipe_(img_pipe) {
   // Checking that flags have reasonable values.
   CHECK_GT(FLAGS_event_array_frequency, 0);
   CHECK_GE(FLAGS_hough_1_window_size, 1);
@@ -89,6 +91,9 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private)
   total_events = 0;
   total_msgs = 0;
 
+  // Pole counter
+  pole_count_ = 1;
+
   // Import calibration file.
   loadCalibration();
 
@@ -109,11 +114,46 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private)
 
   odom_pose_sub_ = nh_.subscribe("/odometry", 0, &Detector::poseCallback, this);  
 
+  // Viz Helpers
+  // image_transport::ImageTransport img_pipe_(nh_);
+  // img_pipe_ = image_transport::ImageTransport(nh_);
+
   // Plot current hough detections in the video.
   if (FLAGS_show_lines_in_video) {
-    cv::namedWindow("Detected poles", CV_WINDOW_NORMAL);
+    // cv::namedWindow("Detected poles", CV_WINDOW_NORMAL);
     image_raw_sub_ =
         nh_.subscribe("/dvs/image_raw", 0, &Detector::imageCallback, this);
+    hough1_img_pub_ = img_pipe_.advertise("/hough1/image", 10);
+  }
+
+  if (FLAGS_display_2nd_hough_space) {
+    hough2_img_pub_ = img_pipe_.advertise("/hough2/image", 10);
+    // cv::namedWindow("Hough Transform #2", CV_WINDOW_NORMAL);
+  }
+
+  if (FLAGS_show_markers) {
+    pole_viz_pub_ = nh_.advertise<visualization_msgs::Marker>("/poles", 1);
+
+    pole_marker_.header.frame_id = "map";
+    pole_marker_.header.stamp = ros::Time();
+    pole_marker_.ns = "";
+    pole_marker_.id = 0;
+    pole_marker_.type = visualization_msgs::Marker::CYLINDER;
+    pole_marker_.action = visualization_msgs::Marker::ADD;
+    pole_marker_.pose.position.x = 0;
+    pole_marker_.pose.position.y = 0;
+    pole_marker_.pose.position.z = 0;
+    pole_marker_.pose.orientation.w = 1.0;
+    pole_marker_.pose.orientation.x = 0.0;
+    pole_marker_.pose.orientation.y = 0.0;
+    pole_marker_.pose.orientation.z = 0.0;
+    pole_marker_.scale.x = 3;
+    pole_marker_.scale.y = 3;
+    pole_marker_.scale.z = 30;
+    pole_marker_.color.r = 1.0;
+    pole_marker_.color.g = 1.0;
+    pole_marker_.color.b = 0.0;
+    pole_marker_.color.a = 0.6;
   }
 
   // Initializig theta, sin and cos values for first and second Hough
@@ -125,10 +165,6 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private)
 
   // Initializing various transformation matrizes.
   initializeTransformationMatrices();
-
-  if (FLAGS_display_2nd_hough_space) {
-    cv::namedWindow("Hough Transform #2", CV_WINDOW_NORMAL);
-  }
 }
 
 Detector::~Detector() {
@@ -525,8 +561,9 @@ void Detector::visualizeCurrentLineDetections(
     }
   }
 
-  cv::imshow("Detected poles", cur_frame);
-  cv::waitKey(1);
+  hough1_img_pub_.publish(cv_bridge::CvImage(std_msgs::Header(), "bgr8", cur_frame).toImageMsg());
+  // cv::imshow("Detected poles", cur_frame);
+  // cv::waitKey(1);
 }
 
 // Performing itterative Non-Maximum suppression on the current batch of
@@ -1329,8 +1366,10 @@ void Detector::visualizeSecondHoughSpace(
 
   cv::vconcat(line_space_pos, line_space_neg, out);
 
-  cv::imshow("Hough Transform #2", out);
-  cv::waitKey(1);
+  hough2_img_pub_.publish(cv_bridge::CvImage(std_msgs::Header(), "bgr8", out).toImageMsg());
+  //  cv_bridge_.cvToImgMsg(cv_image, "bgr8")
+  // cv::imshow("Hough Transform #2", out);
+  // cv::waitKey(1);
 }
 
 void Detector::drawPolarCorLine(cv::Mat &image_space, float rho, float theta,
@@ -1490,6 +1529,7 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
   new_pole.rho = rho;
   new_pole.theta = theta;
   new_pole.polarity = pol;
+  new_pole.ID = pole_count_;
 
   // Find the point in time of the first observation.
   double y = camera_resolution_width_;
@@ -1574,7 +1614,7 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
         // T_camera_to_world = (train_to_world_transformation * C_camera_train_ *
         //                      camera_train_offset_ * gps_offset_);
 
-        auto T_cam_to_world = T_body_to_world * T_cam_to_body_;
+        Eigen::Affine3d T_cam_to_world = T_body_to_world * T_cam_to_body_;
 
         // Invert train transformation matrix to get world to camera
         // transformaiton.
@@ -1587,7 +1627,7 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
         // world_to_camera_transformation.block<2, 1>(0, 2) =
         //     -rot_part.transpose() * trans_part;
 
-        auto T_world_to_cam = T_cam_to_world.inverse();
+        Eigen::Affine3d T_world_to_cam = T_cam_to_world.inverse();
 
 
         // Eigen::Matrix3d world_to_camera_reduced;
@@ -1597,7 +1637,14 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
         Eigen::Matrix3d T_world_to_cam_reduced;
         T_world_to_cam_reduced = Eigen::Matrix3d::Identity();
 
-        double yaw_ = -T_world_to_cam.rotation().eulerAngles(2, 1, 0)(1);
+        // NOTE: In camera frame, yaw is about Y axis..
+        auto ea_ = T_world_to_cam.rotation().eulerAngles(1, 2, 0);
+        // double yaw_ = ea_(0);
+        double yaw_ = M_PI - ea_(0);
+        // ROS_INFO_STREAM("Euler Angles [YXZ] (deg) -> \n" << (180 / M_PI) * ea_);
+        // ROS_INFO_STREAM("Yaw -> \n" << (180 / M_PI) * yaw_);
+        // ROS_INFO_STREAM("Rot Mat -> \n" << ea_);
+
         Eigen::Rotation2Dd R_world_to_cam_reduced(yaw_);
         T_world_to_cam_reduced.block<2, 2>(0, 0) = R_world_to_cam_reduced.matrix();
         
@@ -1611,7 +1658,8 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
         // projection_matrix = cam_matrix * world_to_camera_transformation;
         projection_matrix = cam_matrix * T_world_to_cam_reduced;
 
-        // ROS_INFO_STREAM("World2Cam -> \n" << T_world_to_cam.matrix());
+        // ROS_INFO_STREAM("Cam2World -> \n" << T_cam_to_world.matrix());
+        // ROS_INFO_STREAM("World2Cam -> \n" << T_world_to_cam_reduced);
 
         // Everything I need for a DLT trianguaiton.
         Eigen::Vector2d pixel_position(i, 1);
@@ -1651,7 +1699,7 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
       // Store new map point in file.
       if (FLAGS_map_output) {
 
-        map_file << std::fixed << "0"
+        map_file << std::fixed << new_pole.ID
                  << ","
                  << "pole"
                  << "," << new_pole.first_observed << "," << new_pole.pos_x
@@ -1660,6 +1708,17 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
                  << ","
                  << "0" << std::endl;
       }
+
+      if (FLAGS_show_markers) {
+        pole_marker_.header.stamp = ros::Time();
+        pole_marker_.id = new_pole.ID;
+        pole_marker_.pose.position.x = new_pole.pos_x;
+        pole_marker_.pose.position.y = new_pole.pos_y;
+        pole_viz_pub_.publish(pole_marker_);
+      }
+      
+      // Increment Pole Counter
+      pole_count_ += 1;
     }
   }
 }
