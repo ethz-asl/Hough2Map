@@ -7,9 +7,17 @@
 #include <dvs_msgs/Event.h>
 #include <dvs_msgs/EventArray.h>
 #include <geometry_msgs/PoseArray.h>
+#include <geometry_msgs/Quaternion.h>
+#include <geometry_msgs/PoseWithCovarianceStamped.h>
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/image_encodings.h>
+
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2/convert.h>
+#include <tf2/transform_datatypes.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <tf2_eigen/tf2_eigen.h>
 
 #include <Eigen/Dense>
 #include <boost/align/aligned_allocator.hpp>
@@ -120,11 +128,11 @@ private:
   const float kAcceptableDistortionRange = 40.0;
   float intrinsics_[4];
   float distortion_coeffs_[4];
+  Eigen::Affine3d T_cam_to_body_;
   Eigen::MatrixXf undist_map_x_;
   Eigen::MatrixXf undist_map_y_;
 
   // ROS interface.
-  // ros::NodeHandle nh_;
 
   ros::NodeHandle nh_;
   ros::NodeHandle nh_private_;
@@ -136,6 +144,8 @@ private:
   ros::Subscriber GPS_orient_;
   ros::Subscriber GPS_vel_;
 
+  ros::Subscriber odom_pose_sub_;
+
   /* Function definitions. */
 
   // Callback functions for subscribers.
@@ -143,6 +153,8 @@ private:
   void positionCallback(const custom_msgs::positionEstimate msg);
   void velocityCallback(const custom_msgs::velocityEstimate msg);
   void orientationCallback(const custom_msgs::orientationEstimate msg);
+  
+  void poseCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr &msg);
 
   // Functions for Hough transform computation.
   hough2map::Detector::line addMaxima(int angle, int rad, double time,
@@ -217,6 +229,8 @@ private:
       const double query_time,
       const std::deque<Eigen::Matrix<S, rows, cols>> &odometry_buffer);
 
+  geometry_msgs::PoseWithCovarianceStamped queryPoseAtTime(const double query_time);
+
   // Visualization functions.
   void drawPolarCorLine(cv::Mat &image_space, float rho, float theta,
                         cv::Scalar color);
@@ -243,6 +257,8 @@ private:
   std::deque<Eigen::Vector3d> raw_gps_buffer_;
   std::deque<Eigen::Vector3d> velocity_buffer_;
   std::deque<Eigen::Vector2d> orientation_buffer_;
+
+  std::deque<geometry_msgs::PoseWithCovarianceStamped::ConstPtr> pose_buffer_;
 
   // Transformation matrix (in [m]) between train and sensors for triangulation.
   Eigen::Matrix3d C_camera_train_;

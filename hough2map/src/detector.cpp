@@ -107,6 +107,8 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private)
   GPS_orient_ = nh_.subscribe("/oxts/orientation", 0,
                               &Detector::orientationCallback, this);
 
+  odom_pose_sub_ = nh_.subscribe("/odometry", 0, &Detector::poseCallback, this);  
+
   // Plot current hough detections in the video.
   if (FLAGS_show_lines_in_video) {
     cv::namedWindow("Detected poles", CV_WINDOW_NORMAL);
@@ -147,16 +149,17 @@ void Detector::initializeTransformationMatrices() {
 
   // Initialize transformation matrices.
 
-  // Rotating camera relative to train.
+  // Rotating camera relative to train. --> TODO: remove
   C_camera_train_ << 0, -1, 0, 1, 0, 0, 0, 0, 1;
 
   // GPS offset to center of train in meters.
+  // NOTE: incorporated in body odometry
   gps_offset_ << 1, 0, 0, 0, 1, -0.8, 0, 0, 1;
 
-  // Camera offset to center of train in meters.
+  // Camera offset to center of train in meters. --> TODO: remove
   camera_train_offset_ << 1, 0, -FLAGS_camera_offset_x, 0, 1,
       FLAGS_camera_offset_y, 0, 0, 1;
-}
+} 
 
 // Function to precompute angles, sin and cos values for a vectorized version
 // of the HT. Templated to deal with float and double accuracy.
@@ -216,6 +219,19 @@ void Detector::loadCalibration() {
     intrinsics_[i] = (*it).real();
     i++;
   }
+
+  CHECK_EQ(cam["extrinsics"].size(), 16)
+      << ": Not enough extrinsics, 16 values expected (row major)!";
+  cv::FileNodeIterator et = cam["extrinsics"].begin(),
+                       et_end = cam["extrinsics"].end();
+  i = 0;
+  // Load column major and transpose it
+  Eigen::Matrix<double, 4, 4> flatExtrinsics;
+  for (; et != et_end; ++et) {
+    flatExtrinsics(i) = (*et).real();
+    i++;
+  }
+  T_cam_to_body_.matrix() = flatExtrinsics.transpose(); 
 
   // Importing the distortion coefficients, again expecting 4 values.
   CHECK_EQ(cam["distortion_coeffs"].size(), 4)
@@ -320,6 +336,20 @@ void Detector::orientationCallback(const custom_msgs::orientationEstimate msg) {
   while (kAlignedTimestamp - orientation_buffer_.front()[0] >
          FLAGS_buffer_size_s) {
     orientation_buffer_.pop_front();
+  }
+}
+
+void Detector::poseCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr &msg) {
+  // Add to pose buffer
+  pose_buffer_.push_back(msg);
+
+  // NOTE: Time correction offset must be done in the source
+
+  // Clean up buffer
+  const double kCurrentTimestamp = msg->header.stamp.toSec();
+  while (kCurrentTimestamp - pose_buffer_.front()->header.stamp.toSec() >
+         FLAGS_buffer_size_s) {
+    pose_buffer_.pop_front();
   }
 }
 
@@ -1476,13 +1506,13 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
 
   // The observation timestamp of the pole is still within the timespan
   // covered by the odometry buffer.
-  if (first_observation > raw_gps_buffer_.front()[0]) {
+  if (first_observation > pose_buffer_.front()->header.stamp.toSec()) {
 
     // Query raw gps position at observation beginning time.
-    Eigen::Vector3d last_position =
-        queryOdometryBuffer(first_observation, raw_gps_buffer_);
-    Eigen::Vector3d last_velocity =
-        queryOdometryBuffer(first_observation, velocity_buffer_);
+    // Eigen::Vector3d last_position =
+    //     queryOdometryBuffer(first_observation, raw_gps_buffer_);
+    // Eigen::Vector3d last_velocity =
+    //     queryOdometryBuffer(first_observation, velocity_buffer_);
 
     // In the next step we want to inspect the pole at each observation
     // timepoint, so each time it moved from one pixel to the next. This means
@@ -1506,66 +1536,88 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
           << ":Something is wrong with observation odometry integration!";
 
       // Integrate odometry to get respective train transformations.
-      if (observation_timestamp <= raw_gps_buffer_.back()[0]) {
+      if (observation_timestamp <= pose_buffer_.back()->header.stamp.toSec()) {
         // Get the latest odometry.
-        Eigen::Vector3d cur_velocity =
-            queryOdometryBuffer(observation_timestamp, velocity_buffer_);
-        Eigen::Vector2d cur_orientation =
-            queryOdometryBuffer(observation_timestamp, orientation_buffer_);
+        // Eigen::Vector3d cur_velocity =
+        //     queryOdometryBuffer(observation_timestamp, velocity_buffer_);
+        // Eigen::Vector2d cur_orientation =
+        //     queryOdometryBuffer(observation_timestamp, orientation_buffer_);
 
-        Eigen::Vector3d new_position = last_position;
+        auto cur_pose = queryPoseAtTime(observation_timestamp);
+
+        // Eigen::Vector3d new_position = last_position;
 
         // Compute deltaT.
-        const double diff = observation_timestamp - last_position[0];
+        // const double diff = observation_timestamp - last_position[0];
 
-        // Integrating odom.
-        new_position[0] = observation_timestamp;
-        new_position[1] += 0.5 * (cur_velocity[1] + last_velocity[1]) * diff;
-        new_position[2] += 0.5 * (cur_velocity[2] + last_velocity[2]) * diff;
+        // // Integrating odom.
+        // new_position[0] = observation_timestamp;
+        // new_position[1] += 0.5 * (cur_velocity[1] + last_velocity[1]) * diff;
+        // new_position[2] += 0.5 * (cur_velocity[2] + last_velocity[2]) * diff;
 
-        last_velocity = cur_velocity;
-        last_position = new_position;
+        // last_velocity = cur_velocity;
+        // last_position = new_position;
 
         // Assemble train transformation matrix.
-        Eigen::Matrix3d train_to_world_transformation;
+        Eigen::Affine3d T_body_to_world;
+        tf2::fromMsg(cur_pose.pose.pose , T_body_to_world);
 
-        train_to_world_transformation << std::cos(cur_orientation[1]),
-            std::sin(cur_orientation[1]), new_position[1],
-            -std::sin(cur_orientation[1]), std::cos(cur_orientation[1]),
-            new_position[2], 0, 0, 1;
+        // auto yaw = 
+
+        // train_to_world_transformation << std::cos(cur_orientation[1]),
+        //     std::sin(cur_orientation[1]), new_position[1],
+        //     -std::sin(cur_orientation[1]), std::cos(cur_orientation[1]),
+        //     new_position[2], 0, 0, 1;
 
         // Compute pole position in global frame.
-        Eigen::Matrix3d T_camera_to_world;
-        T_camera_to_world = (train_to_world_transformation * C_camera_train_ *
-                             camera_train_offset_ * gps_offset_);
+        // Eigen::Matrix3d T_camera_to_world;
+        // T_camera_to_world = (train_to_world_transformation * C_camera_train_ *
+        //                      camera_train_offset_ * gps_offset_);
 
-        Eigen::Matrix3d T_gps_to_world;
-        T_gps_to_world =
-            (train_to_world_transformation * C_camera_train_ * gps_offset_);
+        auto T_cam_to_world = T_body_to_world * T_cam_to_body_;
 
         // Invert train transformation matrix to get world to camera
         // transformaiton.
-        Eigen::Matrix2d rot_part = T_camera_to_world.block<2, 2>(0, 0);
-        Eigen::Vector2d trans_part = T_camera_to_world.block<2, 1>(0, 2);
+        // Eigen::Matrix2d rot_part = T_camera_to_world.block<2, 2>(0, 0);
+        // Eigen::Vector2d trans_part = T_camera_to_world.block<2, 1>(0, 2);
 
-        Eigen::Matrix3d world_to_camera_transformation;
-        world_to_camera_transformation = Eigen::Matrix3d::Identity();
-        world_to_camera_transformation.block<2, 2>(0, 0) = rot_part.transpose();
-        world_to_camera_transformation.block<2, 1>(0, 2) =
-            -rot_part.transpose() * trans_part;
+        // Eigen::Matrix3d world_to_camera_transformation;
+        // world_to_camera_transformation = Eigen::Matrix3d::Identity();
+        // world_to_camera_transformation.block<2, 2>(0, 0) = rot_part.transpose();
+        // world_to_camera_transformation.block<2, 1>(0, 2) =
+        //     -rot_part.transpose() * trans_part;
+
+        auto T_world_to_cam = T_cam_to_world.inverse();
+
+
+        // Eigen::Matrix3d world_to_camera_reduced;
+        // world_to_camera_reduced = Eigen::Matrix3d::Identity();
+        // world_to_camera_reduced.block<2, 2>(0, 0) = T_world_to_cam.matrix().block<2, 2>(0, 0);
+        // world_to_camera_reduced.block<2, 1>(0, 2) = T_world_to_cam.matrix().block<2, 1>(0, 3);
+        Eigen::Matrix3d T_world_to_cam_reduced;
+        T_world_to_cam_reduced = Eigen::Matrix3d::Identity();
+
+        double yaw_ = -T_world_to_cam.rotation().eulerAngles(2, 1, 0)(1);
+        Eigen::Rotation2Dd R_world_to_cam_reduced(yaw_);
+        T_world_to_cam_reduced.block<2, 2>(0, 0) = R_world_to_cam_reduced.matrix();
+        
+        T_world_to_cam_reduced(0, 2) = T_world_to_cam.translation()(0);
+        T_world_to_cam_reduced(1, 2) = T_world_to_cam.translation()(2);
 
         // Formulate projection matrix.
         Eigen::Matrix<double, 2, 3> cam_matrix;
         cam_matrix << intrinsics_[0], 0, intrinsics_[2], 0, 0, 1;
-
         Eigen::Matrix<double, 2, 3> projection_matrix;
-        projection_matrix = cam_matrix * world_to_camera_transformation;
+        // projection_matrix = cam_matrix * world_to_camera_transformation;
+        projection_matrix = cam_matrix * T_world_to_cam_reduced;
+
+        // ROS_INFO_STREAM("World2Cam -> \n" << T_world_to_cam.matrix());
 
         // Everything I need for a DLT trianguaiton.
         Eigen::Vector2d pixel_position(i, 1);
         pixel_pos.push_back(pixel_position);
         projection_mats.push_back(projection_matrix);
-        transformation_mats.push_back(world_to_camera_transformation);
+        transformation_mats.push_back(T_world_to_cam_reduced);
       }
     }
 
@@ -1668,6 +1720,45 @@ Eigen::Matrix<S, rows, cols> Detector::queryOdometryBuffer(
   return interpolation_result;
 }
 
+geometry_msgs::PoseWithCovarianceStamped Detector::queryPoseAtTime(const double query_time) {
+  auto lower_it =
+      std::upper_bound(
+          pose_buffer_.begin(), pose_buffer_.end(), query_time,
+          [](double lhs, geometry_msgs::PoseWithCovarianceStampedConstPtr &rhs) -> bool {
+            return lhs < rhs->header.stamp.toSec();
+          }) - 1;
+
+  auto upper_it = std::lower_bound(
+      pose_buffer_.begin(), pose_buffer_.end(), query_time,
+      [](geometry_msgs::PoseWithCovarianceStampedConstPtr &lhs, double rhs) -> bool {
+        return lhs->header.stamp.toSec() < rhs;
+      });
+
+  geometry_msgs::PoseWithCovarianceStamped interpolatedPose;
+
+  // Get interpolation factor (f)a + (1-f)b
+  const double kInterpFactor =  std::abs(query_time - (*lower_it)->header.stamp.toSec()) 
+                              / std::abs((*upper_it)->header.stamp.toSec() - (*lower_it)->header.stamp.toSec());
+
+  // Interpolate timestamp
+  interpolatedPose.header.stamp.fromSec(query_time);
+  interpolatedPose.header.frame_id = (*lower_it)->header.frame_id;
+
+  // Interpolate position
+  interpolatedPose.pose.pose.position.x = (*lower_it)->pose.pose.position.x * kInterpFactor + (*lower_it)->pose.pose.position.x * (1 - kInterpFactor);
+  interpolatedPose.pose.pose.position.y = (*lower_it)->pose.pose.position.y * kInterpFactor + (*lower_it)->pose.pose.position.y * (1 - kInterpFactor);
+  interpolatedPose.pose.pose.position.z = (*lower_it)->pose.pose.position.z * kInterpFactor + (*lower_it)->pose.pose.position.z * (1 - kInterpFactor);
+
+  // Interpolate quaternion SLERP
+  tf2::Quaternion qLower;
+  tf2::Quaternion qUpper;
+  tf2::fromMsg((*lower_it)->pose.pose.orientation, qLower);
+  tf2::fromMsg((*upper_it)->pose.pose.orientation, qUpper);
+  interpolatedPose.pose.pose.orientation = tf2::toMsg(tf2::slerp(qLower, qUpper, kInterpFactor));
+
+  return interpolatedPose;
+}
+
 // Function for converting lat/lon to UTM messages.
 Detector::utm_coordinate Detector::deg2utm(double la, double lo) {
   utm_coordinate result;
@@ -1675,9 +1766,7 @@ Detector::utm_coordinate Detector::deg2utm(double la, double lo) {
   constexpr double sa = 6378137.000000;
   constexpr double sb = 6356752.314245;
 
-  constexpr double e2 = std::sqrt((sa * sa) - (sb * sb)) / sb;
-
-  constexpr double e2squared = e2 * e2;
+  constexpr double e2squared = ((sa * sa) - (sb * sb)) / (sb * sb);
 
   constexpr double c = (sa * sa) / sb;
 
