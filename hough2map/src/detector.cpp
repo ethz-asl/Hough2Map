@@ -142,7 +142,7 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
     pole_marker_.action = visualization_msgs::Marker::ADD;
     pole_marker_.pose.position.x = 0;
     pole_marker_.pose.position.y = 0;
-    pole_marker_.pose.position.z = 0;
+    pole_marker_.pose.position.z = 15;
     pole_marker_.pose.orientation.w = 1.0;
     pole_marker_.pose.orientation.x = 0.0;
     pole_marker_.pose.orientation.y = 0.0;
@@ -1638,15 +1638,20 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
         T_world_to_cam_reduced = Eigen::Matrix3d::Identity();
 
         // NOTE: In camera frame, yaw is about Y axis..
-        auto ea_ = T_world_to_cam.rotation().eulerAngles(1, 2, 0);
+        // auto ea_ = T_world_to_cam.rotation().eulerAngles(1, 2, 0);
         // double yaw_ = ea_(0);
-        double yaw_ = M_PI - ea_(0);
-        // ROS_INFO_STREAM("Euler Angles [YXZ] (deg) -> \n" << (180 / M_PI) * ea_);
-        // ROS_INFO_STREAM("Yaw -> \n" << (180 / M_PI) * yaw_);
-        // ROS_INFO_STREAM("Rot Mat -> \n" << ea_);
-
+        auto yaw_mat_ = T_world_to_cam.matrix();
+        double yaw_ = atan2(yaw_mat_(2, 0) - yaw_mat_(0, 1), yaw_mat_(0, 0) + yaw_mat_(2, 1));
         Eigen::Rotation2Dd R_world_to_cam_reduced(yaw_);
+        // ROS_INFO_STREAM("Euler Angles [YXZ] (deg) -> \n" << (180 / M_PI) * ea_);
+        // if (pole_count_ % 1000 == 0){
+        //   ROS_INFO_STREAM("Tmat -> \n" << T_world_to_cam.rotation());
+        //   ROS_INFO_STREAM("Yaw -> \n" << (180 / M_PI) * yaw_);
+        // }
+
         T_world_to_cam_reduced.block<2, 2>(0, 0) = R_world_to_cam_reduced.matrix();
+        // T_world_to_cam_reduced.block<1, 2>(0, 0) = T_world_to_cam.matrix().block<1,2>(0, 0);
+        // T_world_to_cam_reduced.block<1, 2>(1, 0) = T_world_to_cam.matrix().block<1,2>(2, 0);
         
         T_world_to_cam_reduced(0, 2) = T_world_to_cam.translation()(0);
         T_world_to_cam_reduced(1, 2) = T_world_to_cam.translation()(2);
