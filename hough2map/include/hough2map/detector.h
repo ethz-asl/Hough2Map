@@ -74,12 +74,6 @@ private:
     float weight;
   };
 
-  struct utm_coordinate {
-    double x;
-    double y;
-    std::string zone;
-  };
-
   // Specifying number of threads.
   static const int kNumThreads = 4;
 
@@ -135,39 +129,31 @@ private:
   Eigen::MatrixXf undist_map_x_;
   Eigen::MatrixXf undist_map_y_;
 
-  // Poles
+  // Viz Helpers
+
   visualization_msgs::Marker pole_marker_;
   int pole_count_;
+  image_transport::ImageTransport img_pipe_;
 
   // ROS interface.
 
   ros::NodeHandle nh_;
   ros::NodeHandle nh_private_;
-  ros::Publisher feature_pub_;
+
   ros::Subscriber event_sub_;
+  ros::Subscriber odom_pose_sub_;
   ros::Subscriber image_raw_sub_;
 
-  ros::Subscriber GPS_pos_;
-  ros::Subscriber GPS_orient_;
-  ros::Subscriber GPS_vel_;
-
-  ros::Subscriber odom_pose_sub_;
-
-  // Viz Helpers
-  image_transport::ImageTransport img_pipe_;
+  ros::Publisher feature_pub_;
+  ros::Publisher pole_viz_pub_;
 
   image_transport::Publisher hough1_img_pub_;
   image_transport::Publisher hough2_img_pub_;
-  ros::Publisher pole_viz_pub_;
 
-  /* Function definitions. */
+  // Function definitions.
 
   // Callback functions for subscribers.
-  void eventCallback(const dvs_msgs::EventArray::ConstPtr &msg);
-  void positionCallback(const custom_msgs::positionEstimate msg);
-  void velocityCallback(const custom_msgs::velocityEstimate msg);
-  void orientationCallback(const custom_msgs::orientationEstimate msg);
-  
+  void eventCallback(const dvs_msgs::EventArray::ConstPtr &msg);  
   void poseCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr &msg);
 
   // Functions for Hough transform computation.
@@ -233,15 +219,7 @@ private:
 
   // Initialisation functions.
   void computeUndistortionMapping();
-  void initializeTransformationMatrices();
   void loadCalibration();
-
-  // Odometry processing functions.
-  utm_coordinate deg2utm(double la, double lo);
-  template <class S, int rows, int cols>
-  Eigen::Matrix<S, rows, cols> queryOdometryBuffer(
-      const double query_time,
-      const std::deque<Eigen::Matrix<S, rows, cols>> &odometry_buffer);
 
   geometry_msgs::PoseWithCovarianceStamped queryPoseAtTime(const double query_time);
 
@@ -267,21 +245,12 @@ private:
   // sliding window.
   dvs_msgs::EventArray feature_msg_;
 
-  // Odometry.
-  std::deque<Eigen::Vector3d> raw_gps_buffer_;
-  std::deque<Eigen::Vector3d> velocity_buffer_;
-  std::deque<Eigen::Vector2d> orientation_buffer_;
-
   std::deque<geometry_msgs::PoseWithCovarianceStamped::ConstPtr> pose_buffer_;
-
-  // Transformation matrix (in [m]) between train and sensors for triangulation.
-  Eigen::Matrix3d C_camera_train_;
-  Eigen::Matrix3d gps_offset_;
-  Eigen::Matrix3d camera_train_offset_;
 
   // Storing the current result of the non-max-suppression.
   cv::Mat cur_greyscale_img_;
 };
+
 } // namespace hough2map
 
 #endif // HOUGH2MAP_DETECTOR_H_

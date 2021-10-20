@@ -103,24 +103,13 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
   omp_set_num_threads(kNumThreads);
 
   // Various subscribers and publishers for event and odometry data.
-  feature_pub_ = nh_.advertise<dvs_msgs::EventArray>("/feature_events", 1);
   event_sub_ = nh_.subscribe("/dvs/events", 0, &Detector::eventCallback, this);
-  GPS_pos_ =
-      nh_.subscribe("/oxts/position", 0, &Detector::positionCallback, this);
-  GPS_vel_ =
-      nh_.subscribe("/oxts/velocity", 0, &Detector::velocityCallback, this);
-  GPS_orient_ = nh_.subscribe("/oxts/orientation", 0,
-                              &Detector::orientationCallback, this);
-
   odom_pose_sub_ = nh_.subscribe("/odometry", 0, &Detector::poseCallback, this);  
 
-  // Viz Helpers
-  // image_transport::ImageTransport img_pipe_(nh_);
-  // img_pipe_ = image_transport::ImageTransport(nh_);
+  feature_pub_ = nh_.advertise<dvs_msgs::EventArray>("/feature_events", 1);
 
   // Plot current hough detections in the video.
   if (FLAGS_show_lines_in_video) {
-    // cv::namedWindow("Detected poles", CV_WINDOW_NORMAL);
     image_raw_sub_ =
         nh_.subscribe("/dvs/image_raw", 0, &Detector::imageCallback, this);
     hough1_img_pub_ = img_pipe_.advertise("/hough1/image", 10);
@@ -128,7 +117,6 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
 
   if (FLAGS_display_2nd_hough_space) {
     hough2_img_pub_ = img_pipe_.advertise("/hough2/image", 10);
-    // cv::namedWindow("Hough Transform #2", CV_WINDOW_NORMAL);
   }
 
   if (FLAGS_show_markers) {
@@ -163,8 +151,6 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
   initializeSinCosMap(thetas_2_, polar_param_mapping_2_, kHough2MinAngle,
                       kHough2MaxAngle, kHough2AngularResolution);
 
-  // Initializing various transformation matrizes.
-  initializeTransformationMatrices();
 }
 
 Detector::~Detector() {
@@ -180,22 +166,6 @@ Detector::~Detector() {
 
 const int Detector::kHough1AngularResolution;
 const int Detector::kHough1RadiusResolution;
-
-void Detector::initializeTransformationMatrices() {
-
-  // Initialize transformation matrices.
-
-  // Rotating camera relative to train. --> TODO: remove
-  C_camera_train_ << 0, -1, 0, 1, 0, 0, 0, 0, 1;
-
-  // GPS offset to center of train in meters.
-  // NOTE: incorporated in body odometry
-  gps_offset_ << 1, 0, 0, 0, 1, -0.8, 0, 0, 1;
-
-  // Camera offset to center of train in meters. --> TODO: remove
-  camera_train_offset_ << 1, 0, -FLAGS_camera_offset_x, 0, 1,
-      FLAGS_camera_offset_y, 0, 0, 1;
-} 
 
 // Function to precompute angles, sin and cos values for a vectorized version
 // of the HT. Templated to deal with float and double accuracy.
@@ -256,10 +226,10 @@ void Detector::loadCalibration() {
     i++;
   }
 
-  CHECK_EQ(cam["extrinsics"].size(), 16)
+  CHECK_EQ(cam["cam_to_body"].size(), 16)
       << ": Not enough extrinsics, 16 values expected (row major)!";
-  cv::FileNodeIterator et = cam["extrinsics"].begin(),
-                       et_end = cam["extrinsics"].end();
+  cv::FileNodeIterator et = cam["cam_to_body"].begin(),
+                       et_end = cam["cam_to_body"].end();
   i = 0;
   // Load column major and transpose it
   Eigen::Matrix<double, 4, 4> flatExtrinsics;
@@ -318,72 +288,16 @@ void Detector::computeUndistortionMapping() {
   }
 }
 
-// Processing incoming GPS position data.
-void Detector::positionCallback(const custom_msgs::positionEstimate msg) {
-  utm_coordinate current_position_utm = deg2utm(msg.latitude, msg.longitude);
-
-  // Add raw_gps to current raw_gps buffer (with alighment for manual odometry
-  // to DVS synchronization).
-  const double kAlignedTimestamp =
-      msg.header.stamp.toSec() + FLAGS_odometry_event_alignment;
-  Eigen::Vector3d current_position_txy;
-  current_position_txy[0] = kAlignedTimestamp;
-  current_position_txy[1] = current_position_utm.x;
-  current_position_txy[2] = current_position_utm.y;
-  raw_gps_buffer_.push_back(current_position_txy);
-
-  while (kAlignedTimestamp - raw_gps_buffer_.front()[0] > FLAGS_buffer_size_s) {
-    raw_gps_buffer_.pop_front();
-  }
-}
-
-// Processing velocity data and storing in buffer.
-void Detector::velocityCallback(const custom_msgs::velocityEstimate msg) {
-
-  // Manually synchronizing DVS to odometry timestamps.
-  const double kAlignedTimestamp =
-      msg.header.stamp.toSec() + FLAGS_odometry_event_alignment;
-  // Add velocity to current velocity buffer.
-  Eigen::Vector3d current_velocity_ten;
-  current_velocity_ten[0] = kAlignedTimestamp;
-  current_velocity_ten[1] = msg.velE;
-  current_velocity_ten[2] = msg.velN;
-  velocity_buffer_.push_back(current_velocity_ten);
-
-  while (kAlignedTimestamp - velocity_buffer_.front()[0] >
-         FLAGS_buffer_size_s) {
-    velocity_buffer_.pop_front();
-  }
-}
-
-void Detector::orientationCallback(const custom_msgs::orientationEstimate msg) {
-
-  double yaw = msg.yaw * M_PI / 180.0;
-
-  // Add orientation to current orientation buffer with manual time stamp
-  // synchronization.
-  const double kAlignedTimestamp =
-      msg.header.stamp.toSec() + FLAGS_odometry_event_alignment;
-  Eigen::Vector2d cur_orient;
-  cur_orient[0] = kAlignedTimestamp;
-  cur_orient[1] = yaw;
-  orientation_buffer_.push_back(cur_orient);
-
-  while (kAlignedTimestamp - orientation_buffer_.front()[0] >
-         FLAGS_buffer_size_s) {
-    orientation_buffer_.pop_front();
-  }
-}
-
 void Detector::poseCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr &msg) {
   // Add to pose buffer
   pose_buffer_.push_back(msg);
 
-  // NOTE: Time correction offset must be done in the source
+  // TODO: Time correction offset must be done in the source
+  const double kAlignedTimestamp =
+      msg->header.stamp.toSec() + FLAGS_odometry_event_alignment;
 
   // Clean up buffer
-  const double kCurrentTimestamp = msg->header.stamp.toSec();
-  while (kCurrentTimestamp - pose_buffer_.front()->header.stamp.toSec() >
+  while (kAlignedTimestamp - pose_buffer_.front()->header.stamp.toSec() >
          FLAGS_buffer_size_s) {
     pose_buffer_.pop_front();
   }
@@ -562,8 +476,6 @@ void Detector::visualizeCurrentLineDetections(
   }
 
   hough1_img_pub_.publish(cv_bridge::CvImage(std_msgs::Header(), "bgr8", cur_frame).toImageMsg());
-  // cv::imshow("Detected poles", cur_frame);
-  // cv::waitKey(1);
 }
 
 // Performing itterative Non-Maximum suppression on the current batch of
@@ -1367,9 +1279,6 @@ void Detector::visualizeSecondHoughSpace(
   cv::vconcat(line_space_pos, line_space_neg, out);
 
   hough2_img_pub_.publish(cv_bridge::CvImage(std_msgs::Header(), "bgr8", out).toImageMsg());
-  //  cv_bridge_.cvToImgMsg(cv_image, "bgr8")
-  // cv::imshow("Hough Transform #2", out);
-  // cv::waitKey(1);
 }
 
 void Detector::drawPolarCorLine(cv::Mat &image_space, float rho, float theta,
@@ -1549,10 +1458,6 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
   if (first_observation > pose_buffer_.front()->header.stamp.toSec()) {
 
     // Query raw gps position at observation beginning time.
-    // Eigen::Vector3d last_position =
-    //     queryOdometryBuffer(first_observation, raw_gps_buffer_);
-    // Eigen::Vector3d last_velocity =
-    //     queryOdometryBuffer(first_observation, velocity_buffer_);
 
     // In the next step we want to inspect the pole at each observation
     // timepoint, so each time it moved from one pixel to the next. This means
@@ -1578,95 +1483,41 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
       // Integrate odometry to get respective train transformations.
       if (observation_timestamp <= pose_buffer_.back()->header.stamp.toSec()) {
         // Get the latest odometry.
-        // Eigen::Vector3d cur_velocity =
-        //     queryOdometryBuffer(observation_timestamp, velocity_buffer_);
-        // Eigen::Vector2d cur_orientation =
-        //     queryOdometryBuffer(observation_timestamp, orientation_buffer_);
 
         auto cur_pose = queryPoseAtTime(observation_timestamp);
-
-        // Eigen::Vector3d new_position = last_position;
-
-        // Compute deltaT.
-        // const double diff = observation_timestamp - last_position[0];
-
-        // // Integrating odom.
-        // new_position[0] = observation_timestamp;
-        // new_position[1] += 0.5 * (cur_velocity[1] + last_velocity[1]) * diff;
-        // new_position[2] += 0.5 * (cur_velocity[2] + last_velocity[2]) * diff;
-
-        // last_velocity = cur_velocity;
-        // last_position = new_position;
 
         // Assemble train transformation matrix.
         Eigen::Affine3d T_body_to_world;
         tf2::fromMsg(cur_pose.pose.pose , T_body_to_world);
 
-        // auto yaw = 
-
-        // train_to_world_transformation << std::cos(cur_orientation[1]),
-        //     std::sin(cur_orientation[1]), new_position[1],
-        //     -std::sin(cur_orientation[1]), std::cos(cur_orientation[1]),
-        //     new_position[2], 0, 0, 1;
-
-        // Compute pole position in global frame.
-        // Eigen::Matrix3d T_camera_to_world;
-        // T_camera_to_world = (train_to_world_transformation * C_camera_train_ *
-        //                      camera_train_offset_ * gps_offset_);
-
         Eigen::Affine3d T_cam_to_world = T_body_to_world * T_cam_to_body_;
 
         // Invert train transformation matrix to get world to camera
-        // transformaiton.
-        // Eigen::Matrix2d rot_part = T_camera_to_world.block<2, 2>(0, 0);
-        // Eigen::Vector2d trans_part = T_camera_to_world.block<2, 1>(0, 2);
-
-        // Eigen::Matrix3d world_to_camera_transformation;
-        // world_to_camera_transformation = Eigen::Matrix3d::Identity();
-        // world_to_camera_transformation.block<2, 2>(0, 0) = rot_part.transpose();
-        // world_to_camera_transformation.block<2, 1>(0, 2) =
-        //     -rot_part.transpose() * trans_part;
-
         Eigen::Affine3d T_world_to_cam = T_cam_to_world.inverse();
 
 
-        // Eigen::Matrix3d world_to_camera_reduced;
-        // world_to_camera_reduced = Eigen::Matrix3d::Identity();
-        // world_to_camera_reduced.block<2, 2>(0, 0) = T_world_to_cam.matrix().block<2, 2>(0, 0);
-        // world_to_camera_reduced.block<2, 1>(0, 2) = T_world_to_cam.matrix().block<2, 1>(0, 3);
+        // Reduce 3D tf to 2D tf
         Eigen::Matrix3d T_world_to_cam_reduced;
         T_world_to_cam_reduced = Eigen::Matrix3d::Identity();
 
-        // NOTE: In camera frame, yaw is about Y axis..
-        // auto ea_ = T_world_to_cam.rotation().eulerAngles(1, 2, 0);
-        // double yaw_ = ea_(0);
+        // NOTE: In camera frame, yaw is about Y axis.. 
+        // ==> We ideally delete [Row 1] and [Col 2]. (index 0)
+        // Hacky atan2 of averages in case of skew matrices
         auto yaw_mat_ = T_world_to_cam.matrix();
         double yaw_ = atan2(yaw_mat_(2, 0) - yaw_mat_(0, 1), yaw_mat_(0, 0) + yaw_mat_(2, 1));
         Eigen::Rotation2Dd R_world_to_cam_reduced(yaw_);
-        // ROS_INFO_STREAM("Euler Angles [YXZ] (deg) -> \n" << (180 / M_PI) * ea_);
-        // if (pole_count_ % 1000 == 0){
-        //   ROS_INFO_STREAM("Tmat -> \n" << T_world_to_cam.rotation());
-        //   ROS_INFO_STREAM("Yaw -> \n" << (180 / M_PI) * yaw_);
-        // }
-
-        T_world_to_cam_reduced.block<2, 2>(0, 0) = R_world_to_cam_reduced.matrix();
-        // T_world_to_cam_reduced.block<1, 2>(0, 0) = T_world_to_cam.matrix().block<1,2>(0, 0);
-        // T_world_to_cam_reduced.block<1, 2>(1, 0) = T_world_to_cam.matrix().block<1,2>(2, 0);
         
+        T_world_to_cam_reduced.block<2, 2>(0, 0) = R_world_to_cam_reduced.matrix();
         T_world_to_cam_reduced(0, 2) = T_world_to_cam.translation()(0);
         T_world_to_cam_reduced(1, 2) = T_world_to_cam.translation()(2);
 
         // Formulate projection matrix.
         Eigen::Matrix<double, 2, 3> cam_matrix;
-        cam_matrix << intrinsics_[0], 0, intrinsics_[2], 0, 0, 1;
         Eigen::Matrix<double, 2, 3> projection_matrix;
-        // projection_matrix = cam_matrix * world_to_camera_transformation;
+        cam_matrix << intrinsics_[0], 0, intrinsics_[2], 0, 0, 1;
         projection_matrix = cam_matrix * T_world_to_cam_reduced;
 
-        // ROS_INFO_STREAM("Cam2World -> \n" << T_cam_to_world.matrix());
-        // ROS_INFO_STREAM("World2Cam -> \n" << T_world_to_cam_reduced);
-
-        // Everything I need for a DLT trianguaiton.
+        // Everything needed for a DLT trianguaiton.
         Eigen::Vector2d pixel_position(i, 1);
         pixel_pos.push_back(pixel_position);
         projection_mats.push_back(projection_matrix);
@@ -1743,47 +1594,6 @@ Detector::line Detector::addMaxima(int angle, int rad, double cur_time,
   return new_line;
 }
 
-// Generalized buffer query function for all odometry buffers.
-template <class S, int rows, int cols>
-Eigen::Matrix<S, rows, cols> Detector::queryOdometryBuffer(
-    const double query_time,
-    const std::deque<Eigen::Matrix<S, rows, cols>> &odometry_buffer) {
-  // Getting data for current time from respective odometry buffer.
-
-  // Check that required timestamp is within buffer.
-  CHECK_GT(query_time, odometry_buffer[0][0])
-      << ": Query time out of range of buffer!";
-
-  if (query_time >= odometry_buffer[odometry_buffer.size() - 1][0]) {
-    return odometry_buffer[odometry_buffer.size() - 1];
-  }
-
-  // Finding the the upper closest and lower closest data points for
-  // interpolation.
-  auto lower_it =
-      std::upper_bound(
-          odometry_buffer.begin(), odometry_buffer.end(), query_time,
-          [](double lhs, Eigen::Matrix<S, rows, cols> rhs) -> bool {
-            return lhs < rhs[0];
-          }) -
-      1;
-
-  auto upper_it = std::lower_bound(
-      odometry_buffer.begin(), odometry_buffer.end(), query_time,
-      [](Eigen::Matrix<S, rows, cols> lhs, double rhs) -> bool {
-        return lhs[0] < rhs;
-      });
-
-  // Interpolate datapoint.
-  double delta =
-      (query_time - (*lower_it)[0]) / ((*upper_it)[0] - (*lower_it)[0]);
-
-  Eigen::Matrix<S, rows, cols> interpolation_result =
-      (*lower_it) + delta * ((*upper_it) - (*lower_it));
-
-  return interpolation_result;
-}
-
 geometry_msgs::PoseWithCovarianceStamped Detector::queryPoseAtTime(const double query_time) {
   auto lower_it =
       std::upper_bound(
@@ -1821,109 +1631,6 @@ geometry_msgs::PoseWithCovarianceStamped Detector::queryPoseAtTime(const double 
   interpolatedPose.pose.pose.orientation = tf2::toMsg(tf2::slerp(qLower, qUpper, kInterpFactor));
 
   return interpolatedPose;
-}
-
-// Function for converting lat/lon to UTM messages.
-Detector::utm_coordinate Detector::deg2utm(double la, double lo) {
-  utm_coordinate result;
-
-  constexpr double sa = 6378137.000000;
-  constexpr double sb = 6356752.314245;
-
-  constexpr double e2squared = ((sa * sa) - (sb * sb)) / (sb * sb);
-
-  constexpr double c = (sa * sa) / sb;
-
-  const double lat = la * M_PI / 180;
-  const double lon = lo * M_PI / 180;
-
-  const double H_d = (lo / 6) + 31;
-  int H;
-
-  if (H_d > 0) {
-    H = std::floor(H_d);
-  } else {
-    H = std::ceil(H_d);
-  }
-
-  const int S = (H * 6) - 183;
-  const double deltaS = lon - (S * (M_PI / 180));
-
-  char letter;
-
-  if (la < -72)
-    letter = 'C';
-  else if (la < -64)
-    letter = 'D';
-  else if (la < -56)
-    letter = 'E';
-  else if (la < -48)
-    letter = 'F';
-  else if (la < -40)
-    letter = 'G';
-  else if (la < -32)
-    letter = 'H';
-  else if (la < -24)
-    letter = 'J';
-  else if (la < -16)
-    letter = 'K';
-  else if (la < -8)
-    letter = 'L';
-  else if (la < -0)
-    letter = 'M';
-  else if (la < 8)
-    letter = 'N';
-  else if (la < 16)
-    letter = 'P';
-  else if (la < 24)
-    letter = 'Q';
-  else if (la < 32)
-    letter = 'R';
-  else if (la < 40)
-    letter = 'S';
-  else if (la < 48)
-    letter = 'T';
-  else if (la < 56)
-    letter = 'U';
-  else if (la < 64)
-    letter = 'V';
-  else if (la < 72)
-    letter = 'W';
-  else
-    letter = 'X';
-
-  const double a = std::cos(lat) * std::sin(deltaS);
-  const double epsilon = 0.5 * std::log((1 + a) / (1 - a));
-  const double nu = std::atan(std::tan(lat) / std::cos(deltaS)) - lat;
-  const double v =
-      (c / std::sqrt((1 + (e2squared * (std::cos(lat) * std::cos(lat)))))) *
-      0.9996;
-  const double ta =
-      (e2squared / 2) * epsilon * epsilon * (std::cos(lat) * std::cos(lat));
-  const double a1 = std::sin(2 * lat);
-  const double a2 = a1 * (std::cos(lat) * std::cos(lat));
-  const double j2 = lat + (a1 / 2);
-  const double j4 = ((3 * j2) + a2) / 4;
-  const double j6 = ((5 * j4) + (a2 * (std::cos(lat) * std::cos(lat)))) / 3;
-
-  const double alfa = (3.0 / 4) * e2squared;
-  const double beta = (5.0 / 3) * alfa * alfa;
-  const double gama = (35.0 / 27) * alfa * alfa * alfa;
-
-  const double Bm = 0.9996 * c * (lat - alfa * j2 + beta * j4 - gama * j6);
-
-  const double xx = epsilon * v * (1 + (ta / 3)) + 500000;
-  double yy = nu * v * (1 + ta) + Bm;
-
-  if (yy < 0) {
-    yy = 9999999 + yy;
-  }
-
-  result.x = xx;
-  result.y = yy;
-  result.zone = std::to_string(H) + letter;
-
-  return result;
 }
 
 } // namespace hough2map
