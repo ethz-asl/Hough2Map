@@ -4,13 +4,16 @@
   <node pkg="rosbag" type="play" name="rosbag" args="$(arg bag) -q -d 3 -s 0"/>
 
   <!-- mapping pipeline -->
+  <arg name="profile" default="rail"/>
+  <arg name="map_out" default="/tmp/_map.txt"/>
+  <arg name="lines_out" default=""/>
   <node name="hough2map" pkg="hough2map" type="hough2map" output="screen">
-    <param name="camera_offset_x" value="2.055"/>
-    <param name="camera_offset_y" value="0.87"/>
+    <param name="calibration_profile" value="$(arg profile)"/>
+    <param name="map_output" value="$(arg map_out)"/>
+    <param name="lines_output" value="$(arg lines_out)"/>
     <param name="buffer_size_s" value="260"/>
     <param name="hough_2_min_threshold" value="7000"/>
     <param name="display_2nd_hough_space" value="true"/>
-    <param name="map_output" value="true"/>
     <param name="show_lines_in_video" value="true"/>
     <param name="show_markers" value="true"/>
     <param name="odometry_event_alignment" value="-0.314897455547225"/>

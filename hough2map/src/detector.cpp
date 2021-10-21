@@ -20,17 +20,12 @@ DEFINE_bool(show_lines_in_video, false,
             "Plot detected lines in the video stream");
 DEFINE_bool(show_markers, false,
             "Plot detected lines in the video stream");
-DEFINE_bool(lines_output, false, "Output detected lines to a file");
-DEFINE_bool(map_output, false, "Export detected poles to file");
 DEFINE_bool(display_2nd_hough_space, false,
             "Display the current 2nd degree hough Space");
 DEFINE_bool(odometry_available, true, "A GPS Odometry is available");
 DEFINE_double(odometry_event_alignment, 0,
               "Manual time synchronization to compensate misalignment between "
               "odometry and DVS timestamps");
-DEFINE_double(camera_offset_x, 0, "Camera offset along the train axis");
-DEFINE_double(camera_offset_y, 0,
-              "Camera offset perpendicular to the left of the train axis");
 DEFINE_bool(perform_camera_undistortion, true,
             "Undistort event data according to camera calibration");
 DEFINE_double(buffer_size_s, 30, "Size of the odometry buffer in seconds");
@@ -50,6 +45,9 @@ DEFINE_double(
     hough_2_nms_neg_pos_radial_matching, 2500,
     "Radial separation between a positive and a negative pole detection for "
     "them to be confirmed as a pole detection. Value is in pixels sqared.");
+DEFINE_string(lines_output, "", "Output detected lines to a file");
+DEFINE_string(map_output, "", "Export detected poles to file");
+DEFINE_string(calibration_profile, "rail", "Profile to use for calibration");
 
 namespace hough2map {
 Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private, const image_transport::ImageTransport &img_pipe)
@@ -63,25 +61,24 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
   CHECK_GT(FLAGS_hough_2_min_threshold, 0);
 
   // File output for the line parameters of the lines in the event stream.
-  if (FLAGS_lines_output) {
-    lines_file.open(lines_file_path);
+  if (!FLAGS_lines_output.empty()) {
+    lines_file.open(FLAGS_lines_output);
 
     if (lines_file.is_open()) {
       lines_file << "time,param,pol\n";
     } else {
-      LOG(FATAL) << "Could not open file:" << lines_file_path << std::endl;
+      LOG(FATAL) << "Could not open file:" << FLAGS_lines_output << std::endl;
     }
   }
 
   // Output file for the map data.
-  if (FLAGS_map_output) {
-    map_file.open(map_file_path);
+  if (!FLAGS_map_output.empty()) {
+    map_file.open(FLAGS_map_output);
 
     if (map_file.is_open()) {
       map_file << "id,type,time,x,y,orientation,velocity,weight\n";
-
     } else {
-      LOG(FATAL) << "Could not open file:" << map_file_path << std::endl;
+      LOG(FATAL) << "Could not open file:" << FLAGS_map_output << std::endl;
     }
   }
 
@@ -155,11 +152,11 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
 
 Detector::~Detector() {
   // Close all open files.
-  if (FLAGS_lines_output) {
+  if (!FLAGS_lines_output.empty() && lines_file.is_open()) {
     lines_file.close();
   }
 
-  if (FLAGS_map_output) {
+  if (!FLAGS_map_output.empty() && map_file.is_open()) {
     map_file.close();
   }
 }
@@ -194,7 +191,7 @@ void Detector::loadCalibration() {
   // File path to calibration file.
   std::string package_path = ros::package::getPath("hough2map");
   std::string calibration_file =
-      package_path + "/share/" + calibration_file_name;
+      package_path + "/share/" + FLAGS_calibration_profile + ".yaml"; 
 
   cv::FileStorage fs(calibration_file, cv::FileStorage::READ);
 
@@ -1553,7 +1550,7 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
       new_pole.pos_y = x[1] / x[2];
 
       // Store new map point in file.
-      if (FLAGS_map_output) {
+      if (!FLAGS_map_output.empty() && map_file.is_open()) {
 
         map_file << std::fixed << new_pole.ID
                  << ","

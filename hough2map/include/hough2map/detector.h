@@ -80,13 +80,8 @@ private:
   // File Output.
   const bool file_output_parameter_logging = true;
 
-  const char *lines_file_path = "/tmp/lines.txt";
   std::ofstream lines_file;
-
-  const char *map_file_path = "/tmp/map.txt";
   std::ofstream map_file;
-
-  const char *calibration_file_name = "calibration.yaml";
 
   // Timing debugging.
   double total_events_timing_us;
