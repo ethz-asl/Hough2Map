@@ -1,12 +1,3 @@
-[submodule "rpg_dvs_ros"]
-	path = dependencies/rpg_dvs_ros
-	url = https://github.com/uzh-rpg/rpg_dvs_ros
-[submodule "drivers"]
-	path = dependencies/drivers
-	url = https://gitlab.com/autowarefoundation/autoware.ai/drivers.git
-[submodule "maplab"]
-	path = dependencies/maplab
-	url = https://github.com/ethz-asl/maplab
 [submodule "dependencies/rpg_dvs_ros"]
 	path = dependencies/rpg_dvs_ros
 	url = https://github.com/uzh-rpg/rpg_dvs_ros
@@ -25,3 +16,9 @@
 [submodule "dependencies/gflags_catkin"]
 	path = dependencies/gflags_catkin
 	url = https://github.com/ethz-asl/gflags_catkin
+[submodule "dependencies/catkin_simple"]
+	path = dependencies/catkin_simple
+	url = https://github.com/catkin/catkin_simple.git
+[submodule "dependencies/vision_opencv"]
+	path = dependencies/vision_opencv
+	url = https://github.com/ros-perception/vision_opencv.git
