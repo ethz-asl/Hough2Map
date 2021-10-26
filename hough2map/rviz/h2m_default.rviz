@@ -11,6 +11,7 @@ Panels:
         - /Hough Transform 11
         - /Hough Transform 21
         - /DVS Rendering1
+        - /Camera Positions1
       Splitter Ratio: 0.5
     Tree Height: 669
   - Class: rviz/Selection
@@ -58,8 +59,8 @@ Visualization Manager:
       Reference Frame: <Fixed Frame>
       Value: true
     - Alpha: 1
-      Axes Length: 15
-      Axes Radius: 2.5
+      Axes Length: 5
+      Axes Radius: 0.5
       Class: rviz/PoseWithCovariance
       Color: 255; 25; 0
       Covariance:
@@ -127,10 +128,42 @@ Visualization Manager:
     - Class: rviz/Marker
       Enabled: true
       Marker Topic: /poles
-      Name: Marker
+      Name: Pole Positions
       Namespaces:
         "": true
       Queue Size: 100
+      Value: true
+    - Class: rviz/Marker
+      Enabled: true
+      Marker Topic: /cams
+      Name: Camera Positions
+      Namespaces:
+        "": true
+      Queue Size: 100
+      Value: true
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz/Path
+      Color: 25; 255; 0
+      Enabled: true
+      Head Diameter: 0.30000001192092896
+      Head Length: 0.20000000298023224
+      Length: 0.30000001192092896
+      Line Style: Lines
+      Line Width: 0.029999999329447746
+      Name: Pose Buffer
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Pose Color: 255; 85; 255
+      Pose Style: None
+      Queue Size: 10
+      Radius: 0.029999999329447746
+      Shaft Diameter: 0.10000000149011612
+      Shaft Length: 0.10000000149011612
+      Topic: /pose_buffer
+      Unreliable: false
       Value: true
   Enabled: true
   Global Options:
@@ -160,7 +193,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 480.84002685546875
+      Distance: 366.64471435546875
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -168,17 +201,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 74.75130462646484
-        Y: -105.64678192138672
-        Z: -0.05587131902575493
+        X: 139.70352172851562
+        Y: 3.8606653213500977
+        Z: 30.25966453552246
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.2697969079017639
+      Pitch: 0.4547964334487915
       Target Frame: <Fixed Frame>
-      Yaw: 2.4654128551483154
+      Yaw: 2.2503950595855713
     Saved: ~
 Window Geometry:
   DVS Rendering:

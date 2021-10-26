@@ -7,16 +7,21 @@
   <arg name="profile" default="rail"/>
   <arg name="map_out" default="/tmp/_map.txt"/>
   <arg name="lines_out" default=""/>
+  <arg name="pole_markers" default="false"/>
   <node name="hough2map" pkg="hough2map" type="hough2map" output="screen">
     <param name="calibration_profile" value="$(arg profile)"/>
     <param name="map_output" value="$(arg map_out)"/>
     <param name="lines_output" value="$(arg lines_out)"/>
-    <param name="buffer_size_s" value="260"/>
+    <param name="show_markers" value="$(arg pole_markers)"/>
+    <param name="hough_1_threshold" value="15"/>
+    <param name="hough_1_window_size" value="500"/>
+    <param name="buffer_size_s" value="30"/>
     <param name="hough_2_min_threshold" value="7000"/>
     <param name="display_2nd_hough_space" value="true"/>
     <param name="show_lines_in_video" value="true"/>
-    <param name="show_markers" value="true"/>
-    <param name="odometry_event_alignment" value="-0.314897455547225"/>
+    <!-- <param name="odometry_event_alignment" value="-0.314897455547225"/> -->
+    <param name="odometry_event_alignment" value="0.0"/>
+    <param name="triangulation_threshold" value="0.1"/>
   </node>
 
   <!-- event visualization -->
@@ -29,10 +34,6 @@
   </node>
 
   <!-- display -->
-  <!-- <node name="image_view" pkg="rqt_image_view" type="rqt_image_view">
-    <remap from="image" to="dvs_rendering"/>
-  </node> -->
-
   <node type="rviz" name="rviz" pkg="rviz" args="-d $(find hough2map)/rviz/h2m_default.rviz" />
 
 </launch>

@@ -1,6 +1,8 @@
 #ifndef HOUGH2MAP_DETECTOR_H_
 #define HOUGH2MAP_DETECTOR_H_
 
+#include <ros/ros.h>
+
 #include <custom_msgs/orientationEstimate.h>
 #include <custom_msgs/positionEstimate.h>
 #include <custom_msgs/velocityEstimate.h>
@@ -8,11 +10,12 @@
 #include <dvs_msgs/EventArray.h>
 #include <geometry_msgs/PoseArray.h>
 #include <geometry_msgs/Quaternion.h>
+#include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
-#include <visualization_msgs/Marker.h>
-#include <ros/ros.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/image_encodings.h>
+#include <nav_msgs/Path.h>
+#include <visualization_msgs/Marker.h>
 
 #include "image_transport/image_transport.h"
 
@@ -126,9 +129,11 @@ private:
 
   // Viz Helpers
 
-  visualization_msgs::Marker pole_marker_;
-  int pole_count_;
   image_transport::ImageTransport img_pipe_;
+  visualization_msgs::Marker pole_marker_;
+  visualization_msgs::Marker cam_marker_;
+  int pole_count_;
+  nav_msgs::Path pose_buffer_path_;
 
   // ROS interface.
 
@@ -141,6 +146,8 @@ private:
 
   ros::Publisher feature_pub_;
   ros::Publisher pole_viz_pub_;
+  ros::Publisher cam_viz_pub_;
+  ros::Publisher pose_buffer_pub_;
 
   image_transport::Publisher hough1_img_pub_;
   image_transport::Publisher hough2_img_pub_;

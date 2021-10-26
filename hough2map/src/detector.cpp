@@ -45,6 +45,9 @@ DEFINE_double(
     hough_2_nms_neg_pos_radial_matching, 2500,
     "Radial separation between a positive and a negative pole detection for "
     "them to be confirmed as a pole detection. Value is in pixels sqared.");
+DEFINE_double(
+    triangulation_threshold, 0.05,
+    "Threshold for Minimal Singular Value to qualify successful triangulation");
 DEFINE_string(lines_output, "", "Output detected lines to a file");
 DEFINE_string(map_output, "", "Export detected poles to file");
 DEFINE_string(calibration_profile, "rail", "Profile to use for calibration");
@@ -117,7 +120,9 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
   }
 
   if (FLAGS_show_markers) {
-    pole_viz_pub_ = nh_.advertise<visualization_msgs::Marker>("/poles", 1);
+    pole_viz_pub_ = nh_.advertise<visualization_msgs::Marker>("/poles", 10);
+    cam_viz_pub_ = nh_.advertise<visualization_msgs::Marker>("/cams", 10);
+    pose_buffer_pub_ = nh_.advertise<nav_msgs::Path>("/pose_buffer", 10);
 
     pole_marker_.header.frame_id = "map";
     pole_marker_.header.stamp = ros::Time();
@@ -127,18 +132,41 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
     pole_marker_.action = visualization_msgs::Marker::ADD;
     pole_marker_.pose.position.x = 0;
     pole_marker_.pose.position.y = 0;
-    pole_marker_.pose.position.z = 15;
+    pole_marker_.pose.position.z = 5;
     pole_marker_.pose.orientation.w = 1.0;
     pole_marker_.pose.orientation.x = 0.0;
     pole_marker_.pose.orientation.y = 0.0;
     pole_marker_.pose.orientation.z = 0.0;
-    pole_marker_.scale.x = 3;
-    pole_marker_.scale.y = 3;
-    pole_marker_.scale.z = 30;
+    pole_marker_.scale.x = 0.3;
+    pole_marker_.scale.y = 0.3;
+    pole_marker_.scale.z = 10;
     pole_marker_.color.r = 1.0;
     pole_marker_.color.g = 1.0;
     pole_marker_.color.b = 0.0;
     pole_marker_.color.a = 0.6;
+
+    cam_marker_.header.frame_id = "map";
+    cam_marker_.header.stamp = ros::Time();
+    cam_marker_.ns = "";
+    cam_marker_.id = 0;
+    cam_marker_.type = visualization_msgs::Marker::SPHERE;
+    cam_marker_.action = visualization_msgs::Marker::ADD;
+    cam_marker_.pose.position.x = 0;
+    cam_marker_.pose.position.y = 0;
+    cam_marker_.pose.position.z = 0;
+    cam_marker_.pose.orientation.w = 1.0;
+    cam_marker_.pose.orientation.x = 0.0;
+    cam_marker_.pose.orientation.y = 0.0;
+    cam_marker_.pose.orientation.z = 0.0;
+    cam_marker_.scale.x = 0.5;
+    cam_marker_.scale.y = 0.5;
+    cam_marker_.scale.z = 0.5;
+    cam_marker_.color.r = 0.0;
+    cam_marker_.color.g = 0.0;
+    cam_marker_.color.b = 1.0;
+    cam_marker_.color.a = 0.4;
+
+    pose_buffer_path_.header.frame_id = "map";
   }
 
   // Initializig theta, sin and cos values for first and second Hough
@@ -297,6 +325,22 @@ void Detector::poseCallback(const geometry_msgs::PoseWithCovarianceStamped::Cons
   while (kAlignedTimestamp - pose_buffer_.front()->header.stamp.toSec() >
          FLAGS_buffer_size_s) {
     pose_buffer_.pop_front();
+  }
+
+  // Viz pose buffer path
+  if (FLAGS_show_markers) {
+    pose_buffer_path_.header.stamp = msg->header.stamp;
+    pose_buffer_path_.poses.clear();
+
+    for (int i = 0; i < pose_buffer_.size(); i++) {
+      geometry_msgs::PoseStamped ps_;
+      ps_.header = pose_buffer_[i]->header;
+      ps_.pose = pose_buffer_[i]->pose.pose;
+      ps_.pose.position.z = 0;
+      pose_buffer_path_.poses.push_back(ps_);
+    }
+
+    pose_buffer_pub_.publish(pose_buffer_path_);
   }
 }
 
@@ -1508,33 +1552,25 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
         T_world_to_cam_reduced(0, 2) = T_world_to_cam.translation()(0);
         T_world_to_cam_reduced(1, 2) = T_world_to_cam.translation()(2);
 
-        // Formulate projection matrix.
-        Eigen::Matrix<double, 2, 3> cam_matrix;
-        Eigen::Matrix<double, 2, 3> projection_matrix;
-        cam_matrix << intrinsics_[0], 0, intrinsics_[2], 0, 0, 1;
-        projection_matrix = cam_matrix * T_world_to_cam_reduced;
-
         // Everything needed for a DLT trianguaiton.
         Eigen::Vector2d pixel_position(i, 1);
         pixel_pos.push_back(pixel_position);
-        projection_mats.push_back(projection_matrix);
         transformation_mats.push_back(T_world_to_cam_reduced);
       }
     }
 
     // Use a Singular Value Decomposition (SVD) to perform the triangulation.
     // This is also known as a Direct Linear Transform (DLT).
-    int num_rows = projection_mats.size();
+    int num_rows = transformation_mats.size();
 
     // At least two observations are required for a triangulation.
     if (num_rows > 2) {
       // Assemble matrix A for DLT.
       Eigen::MatrixXd A;
       A.resize(num_rows, 3);
-      for (int i = 0; i < projection_mats.size(); i++) {
+      for (int i = 0; i < num_rows; i++) {
         // Convert pixel frame to cam frame.
-        double position = ((pixel_pos[i][0] - intrinsics_[3]) / intrinsics_[0]);
-
+        double position = ((pixel_pos[i][0] - intrinsics_[2]) / intrinsics_[0]);
         A.row(i) = position * transformation_mats[i].row(1) -
                    transformation_mats[i].row(0);
       }
@@ -1543,35 +1579,59 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
                                                 Eigen::ComputeThinV);
 
       // Get the last column.
-      Eigen::Vector3d x = svd.matrixV().col(svd.matrixV().cols() - 1);
+      int n_ = svd.matrixV().cols() - 1;
+      Eigen::Vector3d x = svd.matrixV().col(n_);
+      double minSV = svd.singularValues()(n_);
 
-      // Normalize homogenous coordinates.
-      new_pole.pos_x = x[0] / x[2];
-      new_pole.pos_y = x[1] / x[2];
+      // ROS_INFO_STREAM("Min Val --> " << minSV);
 
-      // Store new map point in file.
-      if (!FLAGS_map_output.empty() && map_file.is_open()) {
+      if (minSV < FLAGS_triangulation_threshold) {
+        // Normalize homogenous coordinates.
+        new_pole.pos_x = x[0] / x[2];
+        new_pole.pos_y = x[1] / x[2];
 
-        map_file << std::fixed << new_pole.ID
-                 << ","
-                 << "pole"
-                 << "," << new_pole.first_observed << "," << new_pole.pos_x
-                 << "," << new_pole.pos_y << ","
-                 << "0"
-                 << ","
-                 << "0" << std::endl;
+        // Store new map point in file.
+        if (!FLAGS_map_output.empty() && map_file.is_open()) {
+
+          map_file << std::fixed << new_pole.ID
+                  << ","
+                  << "pole"
+                  << "," << new_pole.first_observed << "," << new_pole.pos_x
+                  << "," << new_pole.pos_y << ","
+                  << "0"
+                  << ","
+                  << "0" << std::endl;
+        }
+
+        // && (new_pole.ID - 1) % 1 == 0
+        if (FLAGS_show_markers) {
+          
+          const ros::Time ts_ = ros::Time();
+
+          // Poles
+          pole_marker_.header.stamp = ts_;
+          pole_marker_.id = new_pole.ID;
+          pole_marker_.pose.position.x = new_pole.pos_x;
+          pole_marker_.pose.position.y = new_pole.pos_y;
+          pole_viz_pub_.publish(pole_marker_);
+
+          // Calculate cam position
+          Eigen::Vector2d w_t_c0 = -transformation_mats.front().block<2,2>(0,0).transpose() * transformation_mats.front().block<2,1>(0,2);
+          Eigen::Vector2d w_t_c1 = -transformation_mats.back().block<2,2>(0,0).transpose() * transformation_mats.back().block<2,1>(0,2);
+
+          // Cam marker
+          cam_marker_.header.stamp = ts_;
+          cam_marker_.id = new_pole.ID;
+          cam_marker_.color.b = 1;
+          cam_marker_.color.g = 0;
+          cam_marker_.pose.position.x = (w_t_c0(0) + w_t_c1(0))/2;
+          cam_marker_.pose.position.y = (w_t_c0(1) + w_t_c1(1))/2;
+          cam_viz_pub_.publish(cam_marker_);
+        }
+        
+        // Increment Pole Counter
+        pole_count_ += 1;
       }
-
-      if (FLAGS_show_markers) {
-        pole_marker_.header.stamp = ros::Time();
-        pole_marker_.id = new_pole.ID;
-        pole_marker_.pose.position.x = new_pole.pos_x;
-        pole_marker_.pose.position.y = new_pole.pos_y;
-        pole_viz_pub_.publish(pole_marker_);
-      }
-      
-      // Increment Pole Counter
-      pole_count_ += 1;
     }
   }
 }
