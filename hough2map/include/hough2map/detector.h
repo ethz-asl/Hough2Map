@@ -93,7 +93,7 @@ private:
   uint64_t total_msgs;
 
   // General Parameters for 1st Hough Transform.
-  static const int kHough1RadiusResolution = 260;
+  static const int kHough1RadiusResolution = 660;
   static const int kHough1AngularResolution = 21;
   static const int kHough1MinAngle = -10;
   static const int kHough1MaxAngle = 10;

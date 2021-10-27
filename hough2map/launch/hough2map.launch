@@ -14,7 +14,7 @@
     <param name="lines_output" value="$(arg lines_out)"/>
     <param name="show_markers" value="$(arg pole_markers)"/>
     <param name="hough_1_threshold" value="15"/>
-    <param name="hough_1_window_size" value="500"/>
+    <param name="hough_1_window_size" value="200"/>
     <param name="buffer_size_s" value="30"/>
     <param name="hough_2_min_threshold" value="7000"/>
     <param name="display_2nd_hough_space" value="true"/>

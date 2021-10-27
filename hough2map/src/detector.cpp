@@ -154,13 +154,13 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
     cam_marker_.pose.position.x = 0;
     cam_marker_.pose.position.y = 0;
     cam_marker_.pose.position.z = 0;
-    cam_marker_.pose.orientation.w = 1.0;
     cam_marker_.pose.orientation.x = 0.0;
     cam_marker_.pose.orientation.y = 0.0;
     cam_marker_.pose.orientation.z = 0.0;
-    cam_marker_.scale.x = 0.5;
-    cam_marker_.scale.y = 0.5;
-    cam_marker_.scale.z = 0.5;
+    cam_marker_.pose.orientation.w = 1.0;
+    cam_marker_.scale.x = 0.2;
+    cam_marker_.scale.y = 0.2;
+    cam_marker_.scale.z = 0.2;
     cam_marker_.color.r = 0.0;
     cam_marker_.color.g = 0.0;
     cam_marker_.color.b = 1.0;
@@ -1508,7 +1508,7 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
 
     std::vector<Eigen::Vector2d> pixel_pos;
     std::vector<Eigen::Matrix<double, 2, 3>> projection_mats;
-    std::vector<Eigen::Matrix3d> transformation_mats;
+    std::vector<Eigen::Affine2d> transformation_mats;
 
     // Observation at each horizontal pixel position.
     for (int i = camera_resolution_width_; i > 0; i--) {
@@ -1538,7 +1538,7 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
 
 
         // Reduce 3D tf to 2D tf
-        Eigen::Matrix3d T_world_to_cam_reduced;
+        Eigen::Affine2d T_world_to_cam_reduced;
         T_world_to_cam_reduced = Eigen::Matrix3d::Identity();
 
         // NOTE: In camera frame, yaw is about Y axis.. 
@@ -1548,7 +1548,7 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
         double yaw_ = atan2(yaw_mat_(2, 0) - yaw_mat_(0, 1), yaw_mat_(0, 0) + yaw_mat_(2, 1));
         Eigen::Rotation2Dd R_world_to_cam_reduced(yaw_);
         
-        T_world_to_cam_reduced.block<2, 2>(0, 0) = R_world_to_cam_reduced.matrix();
+        T_world_to_cam_reduced.matrix().block<2, 2>(0, 0) = R_world_to_cam_reduced.matrix();
         T_world_to_cam_reduced(0, 2) = T_world_to_cam.translation()(0);
         T_world_to_cam_reduced(1, 2) = T_world_to_cam.translation()(2);
 
@@ -1571,8 +1571,8 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
       for (int i = 0; i < num_rows; i++) {
         // Convert pixel frame to cam frame.
         double position = ((pixel_pos[i][0] - intrinsics_[2]) / intrinsics_[0]);
-        A.row(i) = position * transformation_mats[i].row(1) -
-                   transformation_mats[i].row(0);
+        A.row(i) = position * transformation_mats[i].matrix().row(1) -
+                   transformation_mats[i].matrix().row(0);
       }
       // Singular Value decomposition.
       Eigen::BDCSVD<Eigen::MatrixXd> svd(A, Eigen::ComputeThinU |
@@ -1584,6 +1584,7 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
       double minSV = svd.singularValues()(n_);
 
       // ROS_INFO_STREAM("Min Val --> " << minSV);
+      // ROS_INFO_STREAM("min p --> " << x);
 
       if (minSV < FLAGS_triangulation_threshold) {
         // Normalize homogenous coordinates.
@@ -1613,19 +1614,21 @@ void Detector::newPoleDetection(double rho, double theta, double window_time,
           pole_marker_.id = new_pole.ID;
           pole_marker_.pose.position.x = new_pole.pos_x;
           pole_marker_.pose.position.y = new_pole.pos_y;
+          pole_marker_.color.a = 0.2 + 0.8 * (FLAGS_triangulation_threshold - minSV) / FLAGS_triangulation_threshold;
           pole_viz_pub_.publish(pole_marker_);
 
           // Calculate cam position
-          Eigen::Vector2d w_t_c0 = -transformation_mats.front().block<2,2>(0,0).transpose() * transformation_mats.front().block<2,1>(0,2);
-          Eigen::Vector2d w_t_c1 = -transformation_mats.back().block<2,2>(0,0).transpose() * transformation_mats.back().block<2,1>(0,2);
+          Eigen::Affine2d w_T_c = transformation_mats.front().inverse();
+
+          Eigen::Vector2d w_t_c = w_T_c.translation();
 
           // Cam marker
           cam_marker_.header.stamp = ts_;
           cam_marker_.id = new_pole.ID;
           cam_marker_.color.b = 1;
           cam_marker_.color.g = 0;
-          cam_marker_.pose.position.x = (w_t_c0(0) + w_t_c1(0))/2;
-          cam_marker_.pose.position.y = (w_t_c0(1) + w_t_c1(1))/2;
+          cam_marker_.pose.position.x = w_t_c(0);
+          cam_marker_.pose.position.y = w_t_c(1);
           cam_viz_pub_.publish(cam_marker_);
         }
         
