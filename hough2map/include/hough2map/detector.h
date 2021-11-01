@@ -1,15 +1,29 @@
 #ifndef HOUGH2MAP_DETECTOR_H_
 #define HOUGH2MAP_DETECTOR_H_
 
+#include <ros/ros.h>
+
 #include <custom_msgs/orientationEstimate.h>
 #include <custom_msgs/positionEstimate.h>
 #include <custom_msgs/velocityEstimate.h>
 #include <dvs_msgs/Event.h>
 #include <dvs_msgs/EventArray.h>
 #include <geometry_msgs/PoseArray.h>
-#include <ros/ros.h>
+#include <geometry_msgs/Quaternion.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <geometry_msgs/PoseWithCovarianceStamped.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/image_encodings.h>
+#include <nav_msgs/Path.h>
+#include <visualization_msgs/Marker.h>
+
+#include "image_transport/image_transport.h"
+
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2/convert.h>
+#include <tf2/transform_datatypes.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <tf2_eigen/tf2_eigen.h>
 
 #include <Eigen/Dense>
 #include <boost/align/aligned_allocator.hpp>
@@ -30,7 +44,7 @@ namespace hough2map {
 class Detector {
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-  Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private);
+  Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private, const image_transport::ImageTransport &img_pipe);
   virtual ~Detector();
 
 protected:
@@ -63,25 +77,14 @@ private:
     float weight;
   };
 
-  struct utm_coordinate {
-    double x;
-    double y;
-    std::string zone;
-  };
-
   // Specifying number of threads.
   static const int kNumThreads = 4;
 
   // File Output.
   const bool file_output_parameter_logging = true;
 
-  const char *lines_file_path = "/tmp/lines.txt";
   std::ofstream lines_file;
-
-  const char *map_file_path = "/tmp/map.txt";
   std::ofstream map_file;
-
-  const char *calibration_file_name = "calibration.yaml";
 
   // Timing debugging.
   double total_events_timing_us;
@@ -90,7 +93,7 @@ private:
   uint64_t total_msgs;
 
   // General Parameters for 1st Hough Transform.
-  static const int kHough1RadiusResolution = 260;
+  static const int kHough1RadiusResolution = 660;
   static const int kHough1AngularResolution = 21;
   static const int kHough1MinAngle = -10;
   static const int kHough1MaxAngle = 10;
@@ -120,29 +123,40 @@ private:
   const float kAcceptableDistortionRange = 40.0;
   float intrinsics_[4];
   float distortion_coeffs_[4];
+  Eigen::Affine3d T_cam_to_body_;
   Eigen::MatrixXf undist_map_x_;
   Eigen::MatrixXf undist_map_y_;
 
+  // Viz Helpers
+
+  image_transport::ImageTransport img_pipe_;
+  visualization_msgs::Marker pole_marker_;
+  visualization_msgs::Marker cam_marker_;
+  int pole_count_;
+  nav_msgs::Path pose_buffer_path_;
+
   // ROS interface.
-  // ros::NodeHandle nh_;
 
   ros::NodeHandle nh_;
   ros::NodeHandle nh_private_;
-  ros::Publisher feature_pub_;
+
   ros::Subscriber event_sub_;
+  ros::Subscriber odom_pose_sub_;
   ros::Subscriber image_raw_sub_;
 
-  ros::Subscriber GPS_pos_;
-  ros::Subscriber GPS_orient_;
-  ros::Subscriber GPS_vel_;
+  ros::Publisher feature_pub_;
+  ros::Publisher pole_viz_pub_;
+  ros::Publisher cam_viz_pub_;
+  ros::Publisher pose_buffer_pub_;
 
-  /* Function definitions. */
+  image_transport::Publisher hough1_img_pub_;
+  image_transport::Publisher hough2_img_pub_;
+
+  // Function definitions.
 
   // Callback functions for subscribers.
-  void eventCallback(const dvs_msgs::EventArray::ConstPtr &msg);
-  void positionCallback(const custom_msgs::positionEstimate msg);
-  void velocityCallback(const custom_msgs::velocityEstimate msg);
-  void orientationCallback(const custom_msgs::orientationEstimate msg);
+  void eventCallback(const dvs_msgs::EventArray::ConstPtr &msg);  
+  void poseCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr &msg);
 
   // Functions for Hough transform computation.
   hough2map::Detector::line addMaxima(int angle, int rad, double time,
@@ -207,15 +221,9 @@ private:
 
   // Initialisation functions.
   void computeUndistortionMapping();
-  void initializeTransformationMatrices();
   void loadCalibration();
 
-  // Odometry processing functions.
-  utm_coordinate deg2utm(double la, double lo);
-  template <class S, int rows, int cols>
-  Eigen::Matrix<S, rows, cols> queryOdometryBuffer(
-      const double query_time,
-      const std::deque<Eigen::Matrix<S, rows, cols>> &odometry_buffer);
+  geometry_msgs::PoseWithCovarianceStamped queryPoseAtTime(const double query_time);
 
   // Visualization functions.
   void drawPolarCorLine(cv::Mat &image_space, float rho, float theta,
@@ -239,19 +247,12 @@ private:
   // sliding window.
   dvs_msgs::EventArray feature_msg_;
 
-  // Odometry.
-  std::deque<Eigen::Vector3d> raw_gps_buffer_;
-  std::deque<Eigen::Vector3d> velocity_buffer_;
-  std::deque<Eigen::Vector2d> orientation_buffer_;
-
-  // Transformation matrix (in [m]) between train and sensors for triangulation.
-  Eigen::Matrix3d C_camera_train_;
-  Eigen::Matrix3d gps_offset_;
-  Eigen::Matrix3d camera_train_offset_;
+  std::deque<geometry_msgs::PoseWithCovarianceStamped::ConstPtr> pose_buffer_;
 
   // Storing the current result of the non-max-suppression.
   cv::Mat cur_greyscale_img_;
 };
+
 } // namespace hough2map
 
 #endif // HOUGH2MAP_DETECTOR_H_
