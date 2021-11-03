@@ -12,7 +12,7 @@ typedef std::pair<double, int> PairTX;
 struct HeuristicTrackerConfig {
   double kP1ToleranceDpxDt = 120;  // Tolerance in abs(dpx/dt) above which second point is added
   double kPnToleranceDeltaDxDt = 0.05;  // Tolerance in % below which new point is added
-  double kMaxAllowedDt = 1.0;           // Max dt (in s) allowed from last tracked point
+  double kMaxAllowedDt = 0.4;           // Max dt (in s) allowed from last tracked point
 };
 
 class HeuristicTracker {
