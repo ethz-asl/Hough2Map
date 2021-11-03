@@ -6,6 +6,7 @@ cam0:
   distortion_model: radtan
   intrinsics: [556.7176612320709, 556.5737848320229, 342.4201113309635, 215.1085137623697]
   resolution: [640, 480]
+  events_frequency: 20
   rostopic: /dvs/image_raw
   cam_to_body: [ 0.0,  0.0,  1.0, -0.012166,
                 -1.0,  0.0,  0.0,  0.044108,
