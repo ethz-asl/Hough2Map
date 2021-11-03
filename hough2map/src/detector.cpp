@@ -79,7 +79,7 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
   profiling_.total_events = 0;
   profiling_.total_msgs = 0;
 
-  // Pole counter
+  // TrackerPole counter
   pole_count_ = 1;
 
   // Import calibration file.
@@ -128,8 +128,8 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
     pole_marker_.pose.orientation.x = 0.0;
     pole_marker_.pose.orientation.y = 0.0;
     pole_marker_.pose.orientation.z = 0.0;
-    pole_marker_.scale.x = 0.3;
-    pole_marker_.scale.y = 0.3;
+    pole_marker_.scale.x = 0.15;
+    pole_marker_.scale.y = 0.15;
     pole_marker_.scale.z = 10;
     pole_marker_.color.r = 1.0;
     pole_marker_.color.g = 1.0;
@@ -924,7 +924,128 @@ void Detector::heuristicTrack(
 }
 
 void Detector::triangulateTracker(HeuristicTracker tracker) {
-  ROS_INFO_STREAM("New Triangulation");
+  // ROS_INFO_STREAM("New Triangulation");
+
+  auto tracker_points = tracker.getPoints();
+
+  TrackerPole new_pole;
+
+  new_pole.ID = pole_count_;
+  new_pole.first_observed = tracker_points.front().first;
+
+  std::vector<Eigen::Vector2d> pixel_pos;
+  std::vector<Eigen::Affine2d> transformation_mats;
+
+  for (auto &&tracker_pt : tracker_points) {
+    if (tracker_pt.first <= pose_buffer_.back()->header.stamp.toSec()) {
+      // Get the latest odometry.
+
+      auto cur_pose = queryPoseAtTime(tracker_pt.first);
+
+      // Assemble train transformation matrix.
+      Eigen::Affine3d T_body_to_world;
+      tf2::fromMsg(cur_pose.pose.pose, T_body_to_world);
+
+      Eigen::Affine3d T_cam_to_world = T_body_to_world * T_cam_to_body_;
+
+      // Invert train transformation matrix to get world to camera
+      Eigen::Affine3d T_world_to_cam = T_cam_to_world.inverse();
+
+      // Reduce 3D tf to 2D tf
+      Eigen::Affine2d T_world_to_cam_reduced;
+      T_world_to_cam_reduced = Eigen::Matrix3d::Identity();
+
+      // NOTE: In camera frame, yaw is about Y axis..
+      // ==> We ideally delete [Row 1] and [Col 2]. (index 0)
+      // Hacky atan2 of averages in case of skew matrices
+      auto yaw_mat_ = T_world_to_cam.matrix();
+      double yaw_ = atan2(yaw_mat_(2, 0) - yaw_mat_(0, 1), yaw_mat_(0, 0) + yaw_mat_(2, 1));
+      Eigen::Rotation2Dd R_world_to_cam_reduced(yaw_);
+
+      T_world_to_cam_reduced.matrix().block<2, 2>(0, 0) = R_world_to_cam_reduced.matrix();
+      T_world_to_cam_reduced(0, 2) = T_world_to_cam.translation()(0);
+      T_world_to_cam_reduced(1, 2) = T_world_to_cam.translation()(2);
+
+      // Everything needed for a DLT trianguaiton.
+      Eigen::Vector2d pixel_position(tracker_pt.second, 1);
+      pixel_pos.push_back(pixel_position);
+      transformation_mats.push_back(T_world_to_cam_reduced);
+    }
+  }
+  // Use a Singular Value Decomposition (SVD) to perform the triangulation.
+  // This is also known as a Direct Linear Transform (DLT).
+  int num_rows = transformation_mats.size();
+
+  // At least two observations are required for a triangulation.
+  if (num_rows > 2) {
+    // Assemble matrix A for DLT.
+    Eigen::MatrixXd A;
+    A.resize(num_rows, 3);
+    for (int i = 0; i < num_rows; i++) {
+      // Convert pixel frame to cam frame.
+      double position = ((pixel_pos[i][0] - intrinsics_[2]) / intrinsics_[0]);
+      A.row(i) = position * transformation_mats[i].matrix().row(1) -
+                 transformation_mats[i].matrix().row(0);
+    }
+    // Singular Value decomposition.
+    Eigen::BDCSVD<Eigen::MatrixXd> svd(A, Eigen::ComputeThinU | Eigen::ComputeThinV);
+
+    // Get the last column.
+    int n_ = svd.matrixV().cols() - 1;
+    Eigen::Vector3d x = svd.matrixV().col(n_);
+    double minSV = svd.singularValues()(n_);
+
+    // ROS_INFO_STREAM("Min Val --> " << minSV);
+    // ROS_INFO_STREAM("min p --> " << x);
+
+    if (minSV < FLAGS_triangulation_threshold) {
+      // Normalize homogenous coordinates.
+      new_pole.pos_x = x[0] / x[2];
+      new_pole.pos_y = x[1] / x[2];
+
+      // Store new map point in file.
+      if (!FLAGS_map_output.empty() && map_file.is_open()) {
+        map_file << std::fixed << new_pole.ID << ","
+                 << "pole"
+                 << "," << new_pole.first_observed << "," << new_pole.pos_x << "," << new_pole.pos_y
+                 << ","
+                 << "0"
+                 << ","
+                 << "0" << std::endl;
+      }
+
+      // && (new_pole.ID - 1) % 1 == 0
+      if (FLAGS_show_markers) {
+        const ros::Time ts_ = ros::Time();
+
+        // Poles
+        pole_marker_.header.stamp = ts_;
+        pole_marker_.id = new_pole.ID;
+        pole_marker_.pose.position.x = new_pole.pos_x;
+        pole_marker_.pose.position.y = new_pole.pos_y;
+        pole_marker_.color.a =
+            0.2 + 0.8 * (FLAGS_triangulation_threshold - minSV) / FLAGS_triangulation_threshold;
+        pole_viz_pub_.publish(pole_marker_);
+
+        // Calculate cam position
+        Eigen::Affine2d w_T_c = transformation_mats.front().inverse();
+
+        Eigen::Vector2d w_t_c = w_T_c.translation();
+
+        // Cam marker
+        cam_marker_.header.stamp = ts_;
+        cam_marker_.id = new_pole.ID;
+        cam_marker_.color.b = 1;
+        cam_marker_.color.g = 0;
+        cam_marker_.pose.position.x = w_t_c(0);
+        cam_marker_.pose.position.y = w_t_c(1);
+        cam_viz_pub_.publish(cam_marker_);
+      }
+
+      // Increment TrackerPole Counter
+      pole_count_ += 1;
+    }
+  }
 }
 
 // Apply the scond Hough tranform.
@@ -1291,8 +1412,6 @@ void Detector::visualizeTracker() {
     }
   }
 
-  // cv::drawMarker()
-
   // Draw Tracker Lines
   const double kColumnLengthInSec = (1.0 / kEventArrayFrequency) / (kHough2TimestepsPerMsg);
 
@@ -1503,7 +1622,7 @@ std::vector<int> Detector::getClusteringCentroids(Eigen::VectorXi detections) {
 //   // Creating new pole object. This is on the one hand legacy code, on the
 //   // other hand ready for future on the go map storage, or something like
 //   // that.
-//   Pole new_pole;
+//   TrackerPole new_pole;
 
 //   new_pole.rho = rho;
 //   new_pole.theta = theta;
@@ -1654,7 +1773,7 @@ std::vector<int> Detector::getClusteringCentroids(Eigen::VectorXi detections) {
 //           cam_viz_pub_.publish(cam_marker_);
 //         }
 
-//         // Increment Pole Counter
+//         // Increment TrackerPole Counter
 //         pole_count_ += 1;
 //       }
 //     }

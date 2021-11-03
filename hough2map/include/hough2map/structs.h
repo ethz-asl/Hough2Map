@@ -22,13 +22,7 @@ struct HoughLine {
 };
 
 // Struct for describing a tracked pole.
-struct Pole {
-  double rho;
-  double theta;
-  double t_enter;
-  double t_leave;
-  double t_center;
-  double speed;
+struct TrackerPole {
   int ID;
   double pos_x;
   double pos_y;
