@@ -5,10 +5,10 @@ detector:
   msg_per_window: 100
   centroid_find_window: 9
   centroid_find_thresh: 7
-  triangulation_sv_thresh: 0.01
+  triangulation_sv_thresh: 0.005
 
 hough1:
-  window_size: 500
+  window_size: 400
   threshold: 15
   nms_radius: 10
   radial_resolution: 670
@@ -18,17 +18,17 @@ hough1:
     max: 5
 
 tracker:
-  linearity_window: 11
+  linearity_window: 9
   linearity_tol_px: 5
 
 tracker_mgr:
   centr_buffer_l: 150
-  spawn_thresh: 12
+  spawn_thresh: 13
   dxdt_cluster_tol_px: 5
   max_dx_allowed: 100
   dxdt_range:
     min: 50.0
-    max: 5000.0
+    max: 8000.0
   maturity_age: 0.7
 
 output:
