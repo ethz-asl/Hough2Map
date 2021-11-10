@@ -23,7 +23,6 @@
   <depend>dvs_msgs</depend>
   <depend>custom_msgs</depend>
 
-  <depend>maplab_ros_common</depend>
   <depend>eigen_catkin</depend>
   <depend>opencv3_catkin</depend>
   <depend>cv_bridge</depend>
