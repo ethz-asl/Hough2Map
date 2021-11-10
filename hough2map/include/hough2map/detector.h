@@ -7,7 +7,7 @@
 #include <iostream>
 #include <vector>
 
-#include <eigen3/Eigen/Dense>
+#include <Eigen/Dense>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <omp.h>
@@ -36,6 +36,7 @@
 
 #include "hough2map/structs.h"
 #include "hough2map/tracker.h"
+#include "hough2map/config.h"
 
 namespace hough2map {
 class Detector {
@@ -55,17 +56,22 @@ class Detector {
   // File Output.
   const bool file_output_parameter_logging = true;
 
-  std::ofstream lines_file;
-  std::ofstream map_file;
+  // std::ofstream lines_file;
+  std::ofstream map_file_;
 
   // Timing debugging.
   ProfilingInfo profiling_;
 
+  Hough1Config hough1_config_;
+  DetectorConfig detector_config_;
+  CameraConfig cam_config_;
+  OutputConfig output_config_;
+
   // General Parameters for 1st Hough Transform.
-  int kHough1RadiusResolution = 660;
-  int kHough1AngularResolution = 21;
-  static const int kHough1MinAngle = -10;
-  static const int kHough1MaxAngle = 10;
+  // int kHough1RadiusResolution = 660;  // Hough1
+  // int kHough1AngularResolution = 21;
+  // static const int kHough1MinAngle = -10;
+  // static const int kHough1MaxAngle = 10;
 
   // Precomputing possible angles and their sin/cos values in order to vectorize
   // the HT.
@@ -73,28 +79,28 @@ class Detector {
   Eigen::MatrixXf polar_param_mapping_1_;
 
   // General parameters for 2nd Hough transform.
-  static const int kHough2AngularResolution = 65;
-  static const int kHough2MinAngle = 1;
-  static const int kHough2MaxAngle = 65;
-  Eigen::VectorXd thetas_2_;
-  Eigen::MatrixXd polar_param_mapping_2_;
+  // static const int kHough2AngularResolution = 65;
+  // static const int kHough2MinAngle = 1;
+  // static const int kHough2MaxAngle = 65;
+  // Eigen::VectorXd thetas_2_;
+  // Eigen::MatrixXd polar_param_mapping_2_;
 
-  static const int kHough2TimestepsPerMsg = 3;
-  static const int kHough2MsgPerWindow = 100;
+  // static const int kHough2TimestepsPerMsg = 3;
+  // static const int kHough2MsgPerWindow = 100;
 
-  int kEventArrayFrequency = 30;
-  int kCameraResolutionWidth;
-  int kCameraResolutionHeight;
+  // int kEventArrayFrequency = 30;
+  // int kCameraResolutionWidth;
+  // int kCameraResolutionHeight;
 
-  static const int kTrackerCentroidWindowSize = 5;
-  static const int kTrackerCentroidThreshold = 5;
+  // static const int kTrackerCentroidWindowSize = 7;
+  // static const int kTrackerCentroidThreshold = 5;
 
-  const float kAcceptableDistortionRange = 40.0;
-  float intrinsics_[4];
-  float distortion_coeffs_[4];
-  Eigen::Affine3d T_cam_to_body_;
-  Eigen::MatrixXf undist_map_x_;
-  Eigen::MatrixXf undist_map_y_;
+  // const float kAcceptableDistortionRange = 40.0;
+  // float intrinsics_[4];
+  // float distortion_coeffs_[4];
+  // Eigen::Affine3d T_cam_to_body_;
+  // Eigen::MatrixXf undist_map_x_;
+  // Eigen::MatrixXf undist_map_y_;
 
   // Viz Helpers
 
@@ -103,10 +109,12 @@ class Detector {
   visualization_msgs::Marker cam_marker_;
   int pole_count_;
   nav_msgs::Path pose_buffer_path_;
+  std::deque<Tracker> viz_trackers_;
 
   // Tracker List
-  std::vector<HeuristicTracker> trackers_;
-  HeuristicTrackerConfig tracker_config_;
+  TrackerManagerConfig tracker_mgr_config_;
+  TrackerManager tracker_mgr_;
+
   std::deque<std::vector<int>> cluster_centroids_;
 
   // ROS interface.
@@ -124,7 +132,7 @@ class Detector {
   ros::Publisher pose_buffer_pub_;
 
   image_transport::Publisher hough1_img_pub_;
-  image_transport::Publisher hough2_img_pub_;
+  image_transport::Publisher xt_img_pub_;
 
   // Function definitions.
 
@@ -147,8 +155,8 @@ class Detector {
                            const int kMaxAngle, const int kNumSteps);
   bool isLocalMaxima(const Eigen::MatrixXi &hough_space, int i, int radius);
   // void newPoleDetection(double rho, double theta, double window_time, bool pol);
-  void hough2nms(const int i, const int j, const Eigen::MatrixXi &hough_2_space,
-                 std::vector<cv::Vec3f> &detections);
+  // void hough2nms(const int i, const int j, const Eigen::MatrixXi &hough_2_space,
+  //                std::vector<cv::Vec3f> &detections);
   void computeFullHoughTransform(const int time_step, const int nms_recompute_window,
                                  Eigen::MatrixXi &total_hough_space_neg,
                                  const Eigen::MatrixXi &radii);
@@ -179,12 +187,16 @@ class Detector {
 
   // Tracker
   void heuristicTrack(const std::vector<std::vector<hough2map::HoughLine>> &cur_maxima_list);
-  void triangulateTracker(HeuristicTracker tracker);
+  void triangulateTracker(Tracker tracker);
   std::vector<int> getClusteringCentroids(Eigen::VectorXi detections);
 
   // Initialisation functions.
   void computeUndistortionMapping();
-  void loadCalibration();
+  // void loadCalibration();
+
+  void deriveConfigs();
+  void loadConfigFromParams();
+  void loadCamConfigFromParams();
 
   geometry_msgs::PoseWithCovarianceStamped queryPoseAtTime(const double query_time);
 
@@ -197,8 +209,8 @@ class Detector {
 
   void visualizeTracker();
 
-  std::deque<Eigen::MatrixXi> hough2_queue_neg_;
-  double hough2_queue_last_t;
+  std::deque<Eigen::MatrixXi> houghout_queue_;
+  double houghout_queue_last_t;
 
   // Events from the previous dvs_msg need to be carried over to start of the
   // Hough computation of the next events. This basically ensures a continous

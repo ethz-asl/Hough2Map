@@ -6,70 +6,79 @@
 #include <chrono>
 #include <thread>
 
-DEFINE_int32(hough_1_threshold, 15, "Threshold for the first level Hough transform.");
-DEFINE_int32(hough_1_window_size, 300, "Max queue length for the first Hough transform.");
-DEFINE_int32(hough_space_NMS_suppression_radius, 10,
-             "Non-Maximum-Suppression suppression radius to enforce Maxima separation");
-DEFINE_int32(hough_2_min_threshold, 7000, "Minimal Threshold for the second Hough transform");
-DEFINE_int32(event_subsample_factor, 1, "Subsample Events by a constant factor");
-DEFINE_bool(show_lines_in_video, false, "Plot detected lines in the video stream");
-DEFINE_bool(show_markers, false, "Plot detected lines in the video stream");
-DEFINE_bool(display_2nd_hough_space, false, "Display the current 2nd degree hough Space");
-DEFINE_bool(odometry_available, true, "A GPS Odometry is available");
-DEFINE_double(odometry_event_alignment, 0,
-              "Manual time synchronization to compensate misalignment between "
-              "odometry and DVS timestamps");
-DEFINE_bool(perform_camera_undistortion, true,
-            "Undistort event data according to camera calibration");
-DEFINE_double(buffer_size_s, 30, "Size of the odometry buffer in seconds");
-DEFINE_double(hough_2_nms_min_angle_separation, 20.0,
-              "The suppression radius in the Non-maximum-suppression for the "
-              "second Hough Transform for angles..");
-DEFINE_double(hough_2_nms_min_rho_separation, 50.0,
-              "The suppression radius in the Non-maximum-suppression for the "
-              "second Hough Transform for pixel separation.");
-DEFINE_double(hough_2_nms_neg_pos_angular_matching, 0.05,
-              "Angular separation between a positive and a negative pole detection for "
-              "them to be confirmed as a pole detection. Value is in radians sqared.");
-DEFINE_double(hough_2_nms_neg_pos_radial_matching, 2500,
-              "Radial separation between a positive and a negative pole detection for "
-              "them to be confirmed as a pole detection. Value is in pixels sqared.");
-DEFINE_double(triangulation_threshold, 0.05,
-              "Threshold for Minimal Singular Value to qualify successful triangulation");
-DEFINE_string(lines_output, "", "Output detected lines to a file");
-DEFINE_string(map_output, "", "Export detected poles to file");
-DEFINE_string(calibration_profile, "rail", "Profile to use for calibration");
+// DEFINE_int32(hough_1_threshold, 15, "Threshold for the first level Hough transform.");
+// DEFINE_int32(hough_1_window_size, 300, "Max queue length for the first Hough transform.");
+// DEFINE_int32(hough_space_NMS_suppression_radius, 10,
+//              "Non-Maximum-Suppression suppression radius to enforce Maxima separation");
+// DEFINE_int32(hough_2_min_threshold, 7000, "Minimal Threshold for the second Hough transform");
+// DEFINE_bool(show_lines_in_video, false, "Plot detected lines in the video stream");
+// DEFINE_bool(show_markers, false, "Plot detected lines in the video stream");
+// DEFINE_bool(display_2nd_hough_space, false, "Display the current 2nd degree hough Space");
+// DEFINE_bool(odometry_available, true, "A GPS Odometry is available");
+// DEFINE_double(odometry_event_alignment, 0,
+//               "Manual time synchronization to compensate misalignment between "
+//               "odometry and DVS timestamps");
+// DEFINE_bool(perform_camera_undistortion, true,
+//             "Undistort event data according to camera calibration");
+// DEFINE_int32(event_subsample_factor, 1, "Subsample Events by a constant factor");
+// DEFINE_double(buffer_size_s, 30, "Size of the odometry buffer in seconds");
+// DEFINE_double(triangulation_threshold, 0.05,
+//               "Threshold for Minimal Singular Value to qualify successful triangulation");
+// DEFINE_double(hough_2_nms_min_angle_separation, 20.0,
+//               "The suppression radius in the Non-maximum-suppression for the "
+//               "second Hough Transform for angles..");
+// DEFINE_double(hough_2_nms_min_rho_separation, 50.0,
+//               "The suppression radius in the Non-maximum-suppression for the "
+//               "second Hough Transform for pixel separation.");
+// DEFINE_double(hough_2_nms_neg_pos_angular_matching, 0.05,
+//               "Angular separation between a positive and a negative pole detection for "
+//               "them to be confirmed as a pole detection. Value is in radians sqared.");
+// DEFINE_double(hough_2_nms_neg_pos_radial_matching, 2500,
+//               "Radial separation between a positive and a negative pole detection for "
+//               "them to be confirmed as a pole detection. Value is in pixels sqared.");
+// DEFINE_string(lines_output, "", "Output detected lines to a file");
+// DEFINE_string(map_output, "", "Export detected poles to file");
+// DEFINE_string(calibration_profile, "rail", "Profile to use for calibration");
 
 namespace hough2map {
 Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
                    const image_transport::ImageTransport &img_pipe)
     : nh_(nh), nh_private_(nh_private), img_pipe_(img_pipe) {
   // Checking that flags have reasonable values.
-  CHECK_GE(FLAGS_hough_1_window_size, 1);
-  CHECK_GT(FLAGS_event_subsample_factor, 0);
-  CHECK_GE(FLAGS_buffer_size_s, 1);
-  CHECK_GT(FLAGS_hough_1_threshold, 0);
-  CHECK_GT(FLAGS_hough_2_min_threshold, 0);
+  // CHECK_GE(FLAGS_hough_1_window_size, 1);
+  // CHECK_GT(FLAGS_event_subsample_factor, 0);
+  // CHECK_GE(FLAGS_buffer_size_s, 1);
+  // CHECK_GT(FLAGS_hough_1_threshold, 0);
+  // CHECK_GT(FLAGS_hough_2_min_threshold, 0);
+
+  // Load Calibration
+  loadCamConfigFromParams();
+
+  // Load Config
+  loadConfigFromParams();
+
+  // Configure Tracker Manager
+  tracker_mgr_.init(tracker_mgr_config_);
 
   // File output for the line parameters of the lines in the event stream.
-  if (!FLAGS_lines_output.empty()) {
-    lines_file.open(FLAGS_lines_output);
+  // if (!FLAGS_lines_output.empty()) {
+  //   lines_file.open(FLAGS_lines_output);
 
-    if (lines_file.is_open()) {
-      lines_file << "time,param,pol\n";
-    } else {
-      LOG(FATAL) << "Could not open file:" << FLAGS_lines_output << std::endl;
-    }
-  }
+  //   if (lines_file.is_open()) {
+  //     lines_file << "time,param,pol\n";
+  //   } else {
+  //     LOG(FATAL) << "Could not open file:" << FLAGS_lines_output << std::endl;
+  //   }
+  // }
 
   // Output file for the map data.
-  if (!FLAGS_map_output.empty()) {
-    map_file.open(FLAGS_map_output);
+  if (!output_config_.map_file.empty()) {
+    map_file_.open(output_config_.map_file);
 
-    if (map_file.is_open()) {
-      map_file << "id,type,time,x,y,orientation,velocity,weight\n";
+    if (map_file_.is_open()) {
+      map_file_ << "id,type,time,x,y,orientation,velocity,weight\n";
     } else {
-      LOG(FATAL) << "Could not open file:" << FLAGS_map_output << std::endl;
+      LOG(FATAL) << "Could not open file:" << output_config_.map_file << std::endl;
     }
   }
 
@@ -83,14 +92,13 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
   pole_count_ = 1;
 
   // Import calibration file.
-  loadCalibration();
+  // loadCalibration();
+
+  // Update Hough1 resolutions
+  hough1_config_.radial_resolution = (int)(cam_config_.cam_res_width * 1.1);
 
   // Compute undistortion for given camera parameters.
   computeUndistortionMapping();
-
-  // Declare Hough1 resolutions
-  kHough1AngularResolution = 21;
-  kHough1RadiusResolution = (int)(kCameraResolutionWidth * 1.1);
 
   omp_set_num_threads(kNumThreads);
 
@@ -101,16 +109,12 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
   feature_pub_ = nh_.advertise<dvs_msgs::EventArray>("/feature_events", 1);
 
   // Plot current hough detections in the video.
-  if (FLAGS_show_lines_in_video) {
+  if (output_config_.rviz) {
+    // Setup subscribers and publishers
     image_raw_sub_ = nh_.subscribe("/dvs/image_raw", 0, &Detector::imageCallback, this);
     hough1_img_pub_ = img_pipe_.advertise("/hough1/image", 10);
-  }
+    xt_img_pub_ = img_pipe_.advertise("/xt_space/image", 10);
 
-  if (FLAGS_display_2nd_hough_space) {
-    hough2_img_pub_ = img_pipe_.advertise("/hough2/image", 10);
-  }
-
-  if (FLAGS_show_markers) {
     pole_viz_pub_ = nh_.advertise<visualization_msgs::Marker>("/poles", 10);
     cam_viz_pub_ = nh_.advertise<visualization_msgs::Marker>("/cams", 10);
     pose_buffer_pub_ = nh_.advertise<nav_msgs::Path>("/pose_buffer", 10);
@@ -162,20 +166,20 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
 
   // Initializig theta, sin and cos values for first and second Hough
   // transform.
-  initializeSinCosMap(thetas_1_, polar_param_mapping_1_, kHough1MinAngle, kHough1MaxAngle,
-                      kHough1AngularResolution);
-  initializeSinCosMap(thetas_2_, polar_param_mapping_2_, kHough2MinAngle, kHough2MaxAngle,
-                      kHough2AngularResolution);
+  initializeSinCosMap(thetas_1_, polar_param_mapping_1_, hough1_config_.min_angle,
+                      hough1_config_.max_angle, hough1_config_.angular_resolution);
+  // initializeSinCosMap(thetas_2_, polar_param_mapping_2_, kHough2MinAngle, kHough2MaxAngle,
+  //                     kHough2AngularResolution);
 }
 
 Detector::~Detector() {
   // Close all open files.
-  if (!FLAGS_lines_output.empty() && lines_file.is_open()) {
-    lines_file.close();
-  }
+  // if (!FLAGS_lines_output.empty() && lines_file.is_open()) {
+  //   lines_file.close();
+  // }
 
-  if (!FLAGS_map_output.empty() && map_file.is_open()) {
-    map_file.close();
+  if (!output_config_.map_file.empty() && map_file_.is_open()) {
+    map_file_.close();
   }
 }
 
@@ -200,95 +204,199 @@ void Detector::initializeSinCosMap(Eigen::EigenBase<DerivedVec> &angles,
   }
 }
 
-void Detector::loadCalibration() {
-  // File path to calibration file.
-  std::string package_path = ros::package::getPath("hough2map");
-  std::string calibration_file = package_path + "/share/" + FLAGS_calibration_profile + ".yaml";
+// void Detector::loadCalibration() {
+//   // File path to calibration file.
+//   std::string package_path = ros::package::getPath("hough2map");
+//   std::string calibration_file = package_path + "/share/" + FLAGS_calibration_profile + ".yaml";
 
-  cv::FileStorage fs(calibration_file, cv::FileStorage::READ);
+//   cv::FileStorage fs(calibration_file, cv::FileStorage::READ);
 
-  if (!fs.isOpened()) {
-    LOG(FATAL) << "Could not open calibration file:" << calibration_file << std::endl;
+//   if (!fs.isOpened()) {
+//     LOG(FATAL) << "Could not open calibration file:" << calibration_file << std::endl;
+//   }
+
+//   // Import parameters from calibration file.
+//   cv::FileNode cam = fs["cam0"];
+
+//   // First, let's import the sensor resolution.
+//   cv::FileNode resolution = cam["resolution"];
+//   CHECK_EQ(resolution.size(), 2) << ": Not enough calibration data regarding sensor size!";
+
+//   // Importing sensor resolution.
+//   kCameraResolutionWidth = resolution[0];
+//   kCameraResolutionHeight = resolution[1];
+
+//   kEventArrayFrequency = cam["events_frequency"];
+
+//   // Importing camera intrinsics. Expecting 4 values.
+//   CHECK_EQ(cam["intrinsics"].size(), 4)
+//       << ": Not enough calibration data regarding sensor intrinsics!";
+//   cv::FileNodeIterator it = cam["intrinsics"].begin(), it_end = cam["intrinsics"].end();
+//   int i = 0;
+//   for (; it != it_end; ++it) {
+//     intrinsics_[i] = (*it).real();
+//     i++;
+//   }
+
+//   CHECK_EQ(cam["cam_to_body"].size(), 16)
+//       << ": Not enough extrinsics, 16 values expected (row major)!";
+//   cv::FileNodeIterator et = cam["cam_to_body"].begin(), et_end = cam["cam_to_body"].end();
+//   i = 0;
+//   // Load column major and transpose it
+//   Eigen::Matrix<double, 4, 4> flatExtrinsics;
+//   for (; et != et_end; ++et) {
+//     flatExtrinsics(i) = (*et).real();
+//     i++;
+//   }
+//   T_cam_to_body_.matrix() = flatExtrinsics.transpose();
+
+//   // Importing the distortion coefficients, again expecting 4 values.
+//   CHECK_EQ(cam["distortion_coeffs"].size(), 4)
+//       << ": Not enough calibration data regarding distortion coefficients!";
+//   it = cam["distortion_coeffs"].begin(), it_end = cam["distortion_coeffs"].end();
+//   i = 0;
+//   for (; it != it_end; ++it) {
+//     distortion_coeffs_[i] = (*it).real();
+//     i++;
+//   }
+// }
+
+void Detector::loadCamConfigFromParams() {
+  bool ld = true;
+
+  ros::NodeHandle *nh = &nh_private_;
+
+  // Camera Resolution Info
+  std::vector<int> res;
+  ld = ld && nh->getParam("cam/resolution", res);
+  CHECK_EQ(res.size(), 2);
+  cam_config_.cam_res_width = res[0];
+  cam_config_.cam_res_height = res[1];
+
+  // Misc Info
+  ld = ld && nh->getParam("cam/events_frequency", cam_config_.evt_arr_frequency);
+  ld = ld && nh->getParam("cam/distortion_acceptable", cam_config_.acceptable_dist);
+  ld = ld && nh->getParam("cam/distorted", cam_config_.perform_undist);
+
+  // Intrinsics
+  std::vector<double> intrinsics;
+  ld = ld && nh->getParam("cam/intrinsics", intrinsics);
+  CHECK_EQ(intrinsics.size(), 4) << ": Not enough intrinsics!";
+  for (size_t i = 0; i < intrinsics.size(); i++) {
+    cam_config_.intrinsics[i] = intrinsics[i];
   }
 
-  // Import parameters from calibration file.
-  cv::FileNode cam = fs["cam0"];
-
-  // First, let's import the sensor resolution.
-  cv::FileNode resolution = cam["resolution"];
-  CHECK_EQ(resolution.size(), 2) << ": Not enough calibration data regarding sensor size!";
-
-  // Importing sensor resolution.
-  kCameraResolutionWidth = resolution[0];
-  kCameraResolutionHeight = resolution[1];
-
-  kEventArrayFrequency = cam["events_frequency"];
-
-  // Importing camera intrinsics. Expecting 4 values.
-  CHECK_EQ(cam["intrinsics"].size(), 4)
-      << ": Not enough calibration data regarding sensor intrinsics!";
-  cv::FileNodeIterator it = cam["intrinsics"].begin(), it_end = cam["intrinsics"].end();
-  int i = 0;
-  for (; it != it_end; ++it) {
-    intrinsics_[i] = (*it).real();
-    i++;
+  // Distortion Coeffs
+  std::vector<double> dist_coeffs;
+  ld = ld && nh->getParam("cam/distortion_coeffs", dist_coeffs);
+  CHECK_EQ(dist_coeffs.size(), 4) << ": Not enough dist coeffs!";
+  for (size_t i = 0; i < dist_coeffs.size(); i++) {
+    cam_config_.dist_coeffs[i] = dist_coeffs[i];
   }
 
-  CHECK_EQ(cam["cam_to_body"].size(), 16)
-      << ": Not enough extrinsics, 16 values expected (row major)!";
-  cv::FileNodeIterator et = cam["cam_to_body"].begin(), et_end = cam["cam_to_body"].end();
-  i = 0;
-  // Load column major and transpose it
-  Eigen::Matrix<double, 4, 4> flatExtrinsics;
-  for (; et != et_end; ++et) {
-    flatExtrinsics(i) = (*et).real();
-    i++;
+  // Extrinsics
+  std::vector<double> flat_extrinsics;
+  Eigen::Matrix<double, 4, 4> flat_extrinsics_mat;
+  ld = ld && nh->getParam("cam/cam_to_body", flat_extrinsics);
+  CHECK_EQ(flat_extrinsics.size(), 16) << ": Not enough extrinsics!";
+  for (size_t i = 0; i < flat_extrinsics.size(); i++) {
+    flat_extrinsics_mat(i) = flat_extrinsics[i];
   }
-  T_cam_to_body_.matrix() = flatExtrinsics.transpose();
+  cam_config_.T_cam_to_body.matrix() = flat_extrinsics_mat.transpose();
 
-  // Importing the distortion coefficients, again expecting 4 values.
-  CHECK_EQ(cam["distortion_coeffs"].size(), 4)
-      << ": Not enough calibration data regarding distortion coefficients!";
-  it = cam["distortion_coeffs"].begin(), it_end = cam["distortion_coeffs"].end();
-  i = 0;
-  for (; it != it_end; ++it) {
-    distortion_coeffs_[i] = (*it).real();
-    i++;
+  // Debug message
+  if (!ld) {
+    ROS_WARN_STREAM("Failed to load camera calibration! Using default profile...");
+  } else {
+    ROS_INFO_STREAM("Camera Calibration loaded!");
   }
 }
 
+void Detector::loadConfigFromParams() {
+  bool ld = true;
+
+  ros::NodeHandle *nh = &nh_private_;
+
+  // Hough 1 Config
+  ld = ld && nh->getParam("hough1/angular_resolution", hough1_config_.angular_resolution);
+  ld = ld && nh->getParam("hough1/radial_resolution", hough1_config_.radial_resolution);
+  ld = ld && nh->getParam("hough1/window_size", hough1_config_.window_size);
+  ld = ld && nh->getParam("hough1/threshold", hough1_config_.threshold);
+  ld = ld && nh->getParam("hough1/nms_radius", hough1_config_.nms_radius);
+  ld = ld && nh->getParam("hough1/angle_range/min", hough1_config_.min_angle);
+  ld = ld && nh->getParam("hough1/angle_range/max", hough1_config_.max_angle);
+
+  // Detector Config
+  ld = ld && nh->getParam("detector/evt_subsample_fac", detector_config_.evt_subsample_fac);
+  ld = ld && nh->getParam("detector/buffer_size_s", detector_config_.buffer_size_s);
+  ld = ld && nh->getParam("detector/tsteps_per_msg", detector_config_.tsteps_per_msg);
+  ld = ld && nh->getParam("detector/msg_per_window", detector_config_.msg_per_window);
+  ld = ld && nh->getParam("detector/centroid_find_window", detector_config_.centroid_find_window);
+  ld = ld && nh->getParam("detector/centroid_find_thresh", detector_config_.centroid_find_thresh);
+  ld = ld && nh->getParam("detector/triangulation_sv_thresh", detector_config_.triangln_sv_thresh);
+
+  // Tracker Manager Config
+  ld = ld && nh->getParam("tracker_mgr/centr_buffer_l", tracker_mgr_config_.centroid_buffer_size);
+  ld = ld && nh->getParam("tracker_mgr/spawn_thresh", tracker_mgr_config_.tracker_spawn_threshold);
+  ld = ld && nh->getParam("tracker_mgr/dxdt_cluster_tol_px", tracker_mgr_config_.dx_cluster_tol);
+  ld = ld && nh->getParam("tracker_mgr/maturity_age", tracker_mgr_config_.maturity_age);
+  ld = ld && nh->getParam("tracker_mgr/dxdt_range/min", tracker_mgr_config_.min_dx_dt);
+  ld = ld && nh->getParam("tracker_mgr/dxdt_range/max", tracker_mgr_config_.max_dx_dt);
+
+  // Output Config
+  ld = ld && nh->getParam("output/map_file", output_config_.map_file);
+  ld = ld && nh->getParam("output/rviz", output_config_.rviz);
+
+  // Tracker Config
+  ld = ld && nh->getParam("tracker/linearity_window",
+                          tracker_mgr_config_.tracker_config.linearity_window);
+  ld = ld && nh->getParam("tracker/linearity_tol_px",
+                          tracker_mgr_config_.tracker_config.linearity_tol_px);
+
+  // Debug message
+  if (!ld) {
+    ROS_WARN_STREAM("Failed to load params! Using defaults");
+  } else {
+    ROS_INFO_STREAM("All Params loaded!");
+  }
+}
+
+void Detector::deriveConfigs() {}
+
 void Detector::computeUndistortionMapping() {
   // Setup camera intrinsics from calibration file.
-  cv::Mat camera_matrix = (cv::Mat1d(3, 3) << intrinsics_[0], 0, intrinsics_[2], 0, intrinsics_[1],
-                           intrinsics_[3], 0, 0, 1);
-  cv::Mat distortionCoefficients = (cv::Mat1d(1, 4) << distortion_coeffs_[0], distortion_coeffs_[1],
-                                    distortion_coeffs_[2], distortion_coeffs_[3]);
+  cv::Mat camera_matrix =
+      (cv::Mat1d(3, 3) << cam_config_.intrinsics[0], 0, cam_config_.intrinsics[2], 0,
+       cam_config_.intrinsics[1], cam_config_.intrinsics[3], 0, 0, 1);
+  cv::Mat distortionCoefficients =
+      (cv::Mat1d(1, 4) << cam_config_.dist_coeffs[0], cam_config_.dist_coeffs[1],
+       cam_config_.dist_coeffs[2], cam_config_.dist_coeffs[3]);
 
-  undist_map_x_.resize(kCameraResolutionHeight, kCameraResolutionWidth);
-  undist_map_y_.resize(kCameraResolutionHeight, kCameraResolutionWidth);
+  cam_config_.undist_map_x.resize(cam_config_.cam_res_height, cam_config_.cam_res_width);
+  cam_config_.undist_map_y.resize(cam_config_.cam_res_height, cam_config_.cam_res_width);
 
   // Compute undistortion mapping.
-  for (int i = 0; i < kCameraResolutionWidth; i++) {
-    for (int j = 0; j < kCameraResolutionHeight; j++) {
+  for (int i = 0; i < cam_config_.cam_res_width; i++) {
+    for (int j = 0; j < cam_config_.cam_res_height; j++) {
       cv::Mat_<cv::Point2f> points(1, 1);
       points(0) = cv::Point2f(i, j);
       cv::Mat dst;
 
       cv::undistortPoints(points, dst, camera_matrix, distortionCoefficients);
-      const float u = intrinsics_[0] * dst.at<float>(0, 0) + intrinsics_[2];
-      const float v = intrinsics_[1] * dst.at<float>(0, 1) + intrinsics_[3];
+      const float u = cam_config_.intrinsics[0] * dst.at<float>(0, 0) + cam_config_.intrinsics[2];
+      const float v = cam_config_.intrinsics[1] * dst.at<float>(0, 1) + cam_config_.intrinsics[3];
 
-      CHECK_GT(u, 0.0 - kAcceptableDistortionRange)
+      CHECK_GT(u, 0.0 - cam_config_.acceptable_dist)
           << "Horizontal undistortion is larger than expected";
-      CHECK_LT(u, kCameraResolutionWidth + kAcceptableDistortionRange)
+      CHECK_LT(u, cam_config_.cam_res_width + cam_config_.acceptable_dist)
           << "Horizontal undistortion is larger than expected";
-      CHECK_GT(v, 0.0 - kAcceptableDistortionRange)
+      CHECK_GT(v, 0.0 - cam_config_.acceptable_dist)
           << "Vertical undistortion is larger than expected";
-      CHECK_LT(v, kCameraResolutionHeight + kAcceptableDistortionRange)
+      CHECK_LT(v, cam_config_.cam_res_height + cam_config_.acceptable_dist)
           << "Vertical undistortion is larger than expected";
 
-      undist_map_x_(j, i) = u;
-      undist_map_y_(j, i) = v;
+      cam_config_.undist_map_x(j, i) = u;
+      cam_config_.undist_map_y(j, i) = v;
     }
   }
 }
@@ -298,15 +406,16 @@ void Detector::poseCallback(const geometry_msgs::PoseWithCovarianceStamped::Cons
   pose_buffer_.push_back(msg);
 
   // TODO: Time correction offset must be done in the source
-  const double kAlignedTimestamp = msg->header.stamp.toSec() + FLAGS_odometry_event_alignment;
+  const double kAlignedTimestamp = msg->header.stamp.toSec();
 
   // Clean up buffer
-  while (kAlignedTimestamp - pose_buffer_.front()->header.stamp.toSec() > FLAGS_buffer_size_s) {
+  while (kAlignedTimestamp - pose_buffer_.front()->header.stamp.toSec() >
+         detector_config_.buffer_size_s) {
     pose_buffer_.pop_front();
   }
 
   // Viz pose buffer path
-  if (FLAGS_show_markers) {
+  if (output_config_.rviz) {
     pose_buffer_path_.header.stamp = msg->header.stamp;
     pose_buffer_path_.poses.clear();
 
@@ -331,10 +440,10 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr &msg) {
 
   // If initialized then make sure the last FLAGS_hough_1_window_size events
   // are prepended to the current list of events and remove older events.
-  if (feature_msg_.events.size() > FLAGS_hough_1_window_size) {
-    std::copy(feature_msg_.events.end() - FLAGS_hough_1_window_size, feature_msg_.events.end(),
+  if (feature_msg_.events.size() > hough1_config_.window_size) {
+    std::copy(feature_msg_.events.end() - hough1_config_.window_size, feature_msg_.events.end(),
               feature_msg_.events.begin());
-    feature_msg_.events.resize(FLAGS_hough_1_window_size);
+    feature_msg_.events.resize(hough1_config_.window_size);
   }
 
   // Reshaping the event array into an Eigen matrix.
@@ -347,25 +456,26 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr &msg) {
 
   // Check there are enough events for our window size. This is only relevant
   // during initialization.
-  if (num_events <= FLAGS_hough_1_window_size) {
+  if (num_events <= hough1_config_.window_size) {
     return;
   }
 
   // Computing all the radii for each theta hypothesis. This parameter pair
   // forms the Hough space. This is done all at once for each event.
   Eigen::MatrixXi radii;
-  radii.resize(kHough1AngularResolution, num_events);
+  radii.resize(hough1_config_.angular_resolution, num_events);
   radii = (polar_param_mapping_1_ * points).cast<int>();
 
   // Total Hough Space at NMS Intervals
   // kNmsBatchCount is the reduced number of iterations. This is basically
   // the number of sub-batches that will be processed in parallel
   CHECK_GE(kNumThreads, 1);
-  int nms_recompute_window = std::ceil(float(num_events - FLAGS_hough_1_window_size) / kNumThreads);
-  nms_recompute_window = std::max(nms_recompute_window, FLAGS_hough_1_window_size);
+  int nms_recompute_window =
+      std::ceil(float(num_events - hough1_config_.window_size) / kNumThreads);
+  nms_recompute_window = std::max(nms_recompute_window, hough1_config_.window_size);
   CHECK_GT(nms_recompute_window, 0);
   const int kNmsBatchCount =
-      std::ceil(float(num_events - FLAGS_hough_1_window_size) / nms_recompute_window);
+      std::ceil(float(num_events - hough1_config_.window_size) / nms_recompute_window);
 
   // Initializing total Hough spaces. Total means the Hough Space for a full
   // current window, rather than the Hough Space of an individual event. It is
@@ -383,7 +493,8 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr &msg) {
   // all batches.
 #pragma omp parallel for
   for (int i = 0; i < kNmsBatchCount; i++) {
-    total_hough_spaces_neg[i].resize(kHough1RadiusResolution, kHough1AngularResolution);
+    total_hough_spaces_neg[i].resize(hough1_config_.radial_resolution,
+                                     hough1_config_.angular_resolution);
     total_hough_spaces_neg[i].setZero();
   }
 
@@ -416,7 +527,7 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr &msg) {
     itterativeNMS(k, nms_recompute_window, total_hough_spaces_neg[k], maxima_list, radii);
   }
   // If visualizations are turned on display them in the video stream.
-  if (FLAGS_show_lines_in_video) {
+  if (output_config_.rviz) {
     visualizeCurrentLineDetections(maxima_list);
   }
 
@@ -452,7 +563,7 @@ void Detector::visualizeCurrentLineDetections(
     const std::vector<std::vector<hough2map::HoughLine>> &cur_maxima_list) {
   int num_events = feature_msg_.events.size();
 
-  int negative_detections[kCameraResolutionWidth] = {0};
+  int negative_detections[cam_config_.cam_res_width] = {0};
 
   // Getting the horizontal positions of all vertical line detections.
   for (int i = 0; i < num_events; i++) {
@@ -465,9 +576,9 @@ void Detector::visualizeCurrentLineDetections(
   cv::Mat cur_frame = cur_greyscale_img_;
 
   // Plottin current line detections.
-  for (int i = 0; i < kCameraResolutionWidth; i++) {
+  for (int i = 0; i < cam_config_.cam_res_width; i++) {
     if (negative_detections[i] == 1) {
-      cv::line(cur_frame, cv::Point(i, 0), cv::Point(i, kCameraResolutionHeight),
+      cv::line(cur_frame, cv::Point(i, 0), cv::Point(i, cam_config_.cam_res_height),
                cv::Scalar(0, 0, 255), 2, 8);
     }
   }
@@ -489,7 +600,7 @@ void Detector::itterativeNMS(const int time_step, const int nms_recompute_window
 
   // Itterating over all events which are part of this current batch. These
   // will be added and removed through the iteration process.
-  const int left = FLAGS_hough_1_window_size + time_step * nms_recompute_window + 1;
+  const int left = hough1_config_.window_size + time_step * nms_recompute_window + 1;
   const int right = std::min(left + nms_recompute_window - 1, num_events);
   CHECK_GE(right, left);
 
@@ -508,8 +619,8 @@ void Detector::itterativeNMS(const int time_step, const int nms_recompute_window
     updateHoughSpaceVotes(true, l, radii, total_hough_space_neg);
 
     // Find the oldest event in the current window and get ready to remove it.
-    const int kLRemove = l - FLAGS_hough_1_window_size;
-    CHECK_GE(l - FLAGS_hough_1_window_size, 0);
+    const int kLRemove = l - hough1_config_.window_size;
+    CHECK_GE(l - hough1_config_.window_size, 0);
     const dvs_msgs::Event &event_remove = feature_msg_.events[kLRemove];
 
     // Decrement the accumulator cells for the event to be removed.
@@ -529,20 +640,20 @@ void Detector::itterativeNMS(const int time_step, const int nms_recompute_window
     /* Phase 1 - Obtain candidates for global maxima */
 
     // For points that got incremented.
-    for (int i = 0; i < kHough1AngularResolution; ++i) {
+    for (int i = 0; i < hough1_config_.angular_resolution; ++i) {
       const int kRadius = radii(i, l);
 
-      if ((kRadius >= 0) && (kRadius < kHough1RadiusResolution)) {
+      if ((kRadius >= 0) && (kRadius < hough1_config_.radial_resolution)) {
         updateIncrementedNMS(kTimestamp, i, kRadius, total_hough_space_neg, previous_maxima,
                              discard, new_maxima, new_maxima_value);
       }
     }
 
     // For accumulator cells that got decremented.
-    for (int i = 0; i < kHough1AngularResolution; i++) {
+    for (int i = 0; i < hough1_config_.angular_resolution; i++) {
       const int kRadius = radii(i, kLRemove);
 
-      if ((kRadius >= 0) && (kRadius < kHough1RadiusResolution)) {
+      if ((kRadius >= 0) && (kRadius < hough1_config_.radial_resolution)) {
         updateDecrementedNMS(kTimestamp, i, kRadius, total_hough_space_neg, previous_maxima,
                              discard, new_maxima, new_maxima_value);
       }
@@ -596,7 +707,7 @@ void Detector::itterativeNMS(const int time_step, const int nms_recompute_window
               discard[i] = true;
 
               addMaximaInRadius(kPreviousMaximum.theta_idx, kPreviousMaximum.r,
-                                total_hough_space_neg, FLAGS_hough_1_threshold, kTimestamp,
+                                total_hough_space_neg, hough1_config_.threshold, kTimestamp,
                                 &new_maxima, &new_maxima_value, true);
             }
           }
@@ -630,7 +741,7 @@ void Detector::updateDecrementedNMS(const double kTimestamp, const int kAngle, c
       discard[k] = true;
 
       // Re-add to list of possible maxima for later pruning.
-      addMaximaInRadius(kAngle, kRadius, hough_space, FLAGS_hough_1_threshold, kTimestamp,
+      addMaximaInRadius(kAngle, kRadius, hough_space, hough1_config_.threshold, kTimestamp,
                         &new_maxima, &new_maxima_value);
 
       // The neighborhood of this accumulator cell has been checked as part of
@@ -646,9 +757,9 @@ void Detector::updateDecrementedNMS(const double kTimestamp, const int kAngle, c
     // Iterate over neighbourhood to check if we might have
     // created a new local maxima by decreasing.
     const int m_l = std::max(kAngle - 1, 0);
-    const int m_r = std::min(kAngle + 1, kHough1AngularResolution - 1);
+    const int m_r = std::min(kAngle + 1, hough1_config_.angular_resolution - 1);
     const int n_l = std::max(kRadius - 1, 0);
-    const int n_r = std::min(kRadius + 1, kHough1RadiusResolution - 1);
+    const int n_r = std::min(kRadius + 1, hough1_config_.radial_resolution - 1);
     for (int m = m_l; m <= m_r; m++) {
       for (int n = n_l; n <= n_r; n++) {
         // The center is a separate case.
@@ -658,7 +769,7 @@ void Detector::updateDecrementedNMS(const double kTimestamp, const int kAngle, c
 
         // Any neighbor points now larger and a maximum?
         if ((hough_space(kRadius, kAngle) + 1 == hough_space(n, m)) &&
-            (hough_space(n, m) > FLAGS_hough_1_threshold) && isLocalMaxima(hough_space, m, n)) {
+            (hough_space(n, m) > hough1_config_.threshold) && isLocalMaxima(hough_space, m, n)) {
           // Add to temporary storage.
           new_maxima.push_back(addMaxima(m, n, kTimestamp));
           new_maxima_value.push_back(hough_space(n, m));
@@ -682,9 +793,9 @@ bool Detector::updateIncrementedNMS(const double kTimestamp, const int kAngle, c
   // Iterate over neighbourhood to check if we might have
   // supressed a surrounding maximum by growing.
   const int m_l = std::max(kAngle - 1, 0);
-  const int m_r = std::min(kAngle + 1, kHough1AngularResolution - 1);
+  const int m_r = std::min(kAngle + 1, hough1_config_.angular_resolution - 1);
   const int n_l = std::max(kRadius - 1, 0);
-  const int n_r = std::min(kRadius + 1, kHough1RadiusResolution - 1);
+  const int n_r = std::min(kRadius + 1, hough1_config_.radial_resolution - 1);
   for (int m = m_l; m <= m_r; m++) {
     for (int n = n_l; n <= n_r; n++) {
       // The center is a separate case.
@@ -703,7 +814,7 @@ bool Detector::updateIncrementedNMS(const double kTimestamp, const int kAngle, c
             discard[k] = true;
 
             // And add a new one.
-            addMaximaInRadius(m, n, hough_space, FLAGS_hough_1_threshold, kTimestamp, &new_maxima,
+            addMaximaInRadius(m, n, hough_space, hough1_config_.threshold, kTimestamp, &new_maxima,
                               &new_maxima_value);
             break;
           }
@@ -722,7 +833,7 @@ bool Detector::updateIncrementedNMS(const double kTimestamp, const int kAngle, c
 
   // This is the case for the center point. First checking if it's currently a
   // maximum.
-  if ((hough_space(kRadius, kAngle) > FLAGS_hough_1_threshold) &&
+  if ((hough_space(kRadius, kAngle) > hough1_config_.threshold) &&
       isLocalMaxima(hough_space, kAngle, kRadius)) {
     bool add_maximum = true;
     // Check if it was a maximum previously.
@@ -748,7 +859,7 @@ void Detector::computeFullNMS(const int time_step, const int nms_recompute_windo
                               std::vector<std::vector<hough2map::HoughLine>> &cur_maxima_list) {
   // Index of the current event in the frame of all events of the current
   // message with carry-over from previous message.
-  const int kNmsIndex = FLAGS_hough_1_window_size + time_step * nms_recompute_window;
+  const int kNmsIndex = hough1_config_.window_size + time_step * nms_recompute_window;
   std::vector<hough2map::HoughLine> &current_maxima = cur_maxima_list[kNmsIndex];
 
   // New detected maxima and their value.
@@ -756,14 +867,14 @@ void Detector::computeFullNMS(const int time_step, const int nms_recompute_windo
   std::vector<int> new_maxima_value;
 
   // Checking every angle and radius hypothesis.
-  for (int i = 0; i < kHough1AngularResolution; i++) {
-    for (int j = 0; j < kHough1RadiusResolution; j++) {
+  for (int i = 0; i < hough1_config_.angular_resolution; i++) {
+    for (int j = 0; j < hough1_config_.radial_resolution; j++) {
       // Get the current events for a current time stamp.
       const dvs_msgs::Event &event = feature_msg_.events[kNmsIndex];
 
       // Checking Hough space, whether it is larger than threshold
       // and larger than neighbors.
-      if (total_hough_space_neg(j, i) > FLAGS_hough_1_threshold) {
+      if (total_hough_space_neg(j, i) > hough1_config_.threshold) {
         if (isLocalMaxima(total_hough_space_neg, i, j)) {
           // Add as a possible maximum to the list.
           new_maxima.push_back(addMaxima(i, j, event.ts.toSec()));
@@ -784,8 +895,8 @@ void Detector::computeFullHoughTransform(const int time_step, const int nms_reco
                                          const Eigen::MatrixXi &radii) {
   // Looping over all events that have an influence on the current total
   // Hough space, so the past 300.
-  const int kRight = FLAGS_hough_1_window_size + time_step * nms_recompute_window;
-  const int kLeft = kRight - FLAGS_hough_1_window_size;
+  const int kRight = hough1_config_.window_size + time_step * nms_recompute_window;
+  const int kLeft = kRight - hough1_config_.window_size;
   CHECK_GT(kRight, kLeft);
 
   for (int j = kRight; j > kLeft; j--) {
@@ -801,10 +912,10 @@ void Detector::updateHoughSpaceVotes(const bool increment, const int event_idx,
                                      Eigen::MatrixXi &hough_space_neg) {
   // Looping over all confirmed hypothesis and adding or removing them from the
   // Hough space.
-  for (int k = 0; k < kHough1AngularResolution; k++) {
+  for (int k = 0; k < hough1_config_.angular_resolution; k++) {
     const int kRadius = radii(k, event_idx);
     // making sure the parameter set is within the domain of the HS.
-    if ((kRadius >= 0) && (kRadius < kHough1RadiusResolution)) {
+    if ((kRadius >= 0) && (kRadius < hough1_config_.radial_resolution)) {
       // Incrementing or decrement the accumulator cells.
       if (increment) {
         hough_space_neg(kRadius, k)++;
@@ -826,13 +937,14 @@ void Detector::heuristicTrack(
   // Step 2: Discretizing maxima into timesteps.
 
   Eigen::MatrixXi tracked_maxima_neg;
-  tracked_maxima_neg.resize(kHough1RadiusResolution, kHough2TimestepsPerMsg);
+  tracked_maxima_neg.resize(hough1_config_.radial_resolution, detector_config_.tsteps_per_msg);
   tracked_maxima_neg.setZero();
 
   const double kTimestampMsgBegin = feature_msg_.events[0].ts.toSec();
 
-  CHECK_GT(kHough2TimestepsPerMsg, 0);
-  const double kColumnLengthInSec = (1.0 / kEventArrayFrequency) / (kHough2TimestepsPerMsg);
+  CHECK_GT(detector_config_.tsteps_per_msg, 0);
+  const double kColumnLengthInSec =
+      (1.0 / cam_config_.evt_arr_frequency) / (detector_config_.tsteps_per_msg);
 
   for (int i = 0; i < num_events; i++) {
     const dvs_msgs::Event &e = feature_msg_.events[i];
@@ -842,9 +954,9 @@ void Detector::heuristicTrack(
 
       const int time_idx =
           std::min((int)std::floor((e.ts.toSec() - kTimestampMsgBegin) / kColumnLengthInSec),
-                   kHough2TimestepsPerMsg - 1);
+                   detector_config_.tsteps_per_msg - 1);
 
-      CHECK_LT(time_idx, kHough2TimestepsPerMsg)
+      CHECK_LT(time_idx, detector_config_.tsteps_per_msg)
           << ": Something wrong with the time index!" + time_idx;
 
       // This discretizes the maxima. Many will be same or super close, so we
@@ -854,76 +966,54 @@ void Detector::heuristicTrack(
     }
   }
 
-  const double kWindowSizeInSec = kHough2MsgPerWindow / kEventArrayFrequency;
+  const double kWindowSizeInSec = detector_config_.msg_per_window / cam_config_.evt_arr_frequency;
   const double kWindowEndTime = feature_msg_.events[num_events - 1].ts.toSec();
 
   // Window for data storage.
-  hough2_queue_neg_.push_back(tracked_maxima_neg);
-  hough2_queue_last_t = kTimestampMsgBegin + kColumnLengthInSec * (kHough2TimestepsPerMsg - 1);
+  houghout_queue_.push_back(tracked_maxima_neg);
+  houghout_queue_last_t =
+      kTimestampMsgBegin + kColumnLengthInSec * (detector_config_.tsteps_per_msg - 1);
 
   // Removing old stuff when the window is full.
-  if (hough2_queue_neg_.size() > kHough2MsgPerWindow) {
-    hough2_queue_neg_.pop_front();
+  if (houghout_queue_.size() > detector_config_.msg_per_window) {
+    houghout_queue_.pop_front();
   }
 
   // Get centroids
   for (int i = 0; i < tracked_maxima_neg.cols(); i++) {
+    // Generate timestamp
+    double t = kTimestampMsgBegin + i * kColumnLengthInSec;
+
     // Get list of centroids
     std::vector<int> centroids = getClusteringCentroids(tracked_maxima_neg.col(i));
-
     cluster_centroids_.push_back(centroids);
-    // Temp vector to hold new trackers of this timestep
-    std::vector<HeuristicTracker> new_trackers;
 
-    for (int j = 0; j < centroids.size(); j++) {
-      bool added = false;
-      double t = kTimestampMsgBegin + i * kColumnLengthInSec;
-
-      // Loop through each tracker and check if it accepts this centroid
-      for (int k = 0; k < trackers_.size(); k++) {
-        added = added || trackers_[k].checkAndAdd(t, centroids[j]);
-      }
-
-      // If added to no tracker, create a new tracker and add to new_trackers
-      if (!added) {
-        HeuristicTracker tr(tracker_config_);
-        tr.checkAndAdd(t, centroids[j]);
-        new_trackers.push_back(tr);
-      }
-    }
-
-    // Push new trackers to main trackers_
-    trackers_.insert(trackers_.end(), new_trackers.begin(), new_trackers.end());
+    // Track centroids
+    tracker_mgr_.track(t, centroids);
   }
 
   // Crop the cluster centroids deque
-  while (cluster_centroids_.size() > kHough2TimestepsPerMsg * kHough2MsgPerWindow) {
+  while (cluster_centroids_.size() >
+         detector_config_.tsteps_per_msg * detector_config_.msg_per_window) {
     cluster_centroids_.pop_front();
   }
 
-  // Manage Trackers
-  // ROS_INFO_STREAM("Tracker Size: " << trackers_.size());
-  for (int i = 0; i < trackers_.size(); i++) {
-    // If time delta is above threshold,
-    if (kTimestampMsgBegin - trackers_[i].lastActiveTime() > tracker_config_.kMaxAllowedDt) {
-      // Triangulate pole if more than 5 observations
-      // TODO: Remove hardcoded threshold
-      if (trackers_[i].length() > 5) {
-        triangulateTracker(trackers_[i]);
-      }
-
-      // Purge tracker
-      trackers_.erase(std::next(trackers_.begin(), i));
+  // Get finished Trackers
+  std::vector<Tracker> trackers = tracker_mgr_.getFinishedTrackers(houghout_queue_last_t);
+  for (auto &&tracker : trackers) {
+    triangulateTracker(tracker);
+    if (output_config_.rviz) {
+      viz_trackers_.push_back(tracker);
     }
   }
 
   // Plot the trackers.
-  if (FLAGS_display_2nd_hough_space) {
+  if (output_config_.rviz) {
     visualizeTracker();
   }
 }
 
-void Detector::triangulateTracker(HeuristicTracker tracker) {
+void Detector::triangulateTracker(Tracker tracker) {
   // ROS_INFO_STREAM("New Triangulation");
 
   auto tracker_points = tracker.getPoints();
@@ -931,22 +1021,22 @@ void Detector::triangulateTracker(HeuristicTracker tracker) {
   TrackerPole new_pole;
 
   new_pole.ID = pole_count_;
-  new_pole.first_observed = tracker_points.front().first;
+  new_pole.first_observed = tracker_points.front().x;
 
   std::vector<Eigen::Vector2d> pixel_pos;
   std::vector<Eigen::Affine2d> transformation_mats;
 
   for (auto &&tracker_pt : tracker_points) {
-    if (tracker_pt.first <= pose_buffer_.back()->header.stamp.toSec()) {
+    if (tracker_pt.t <= pose_buffer_.back()->header.stamp.toSec()) {
       // Get the latest odometry.
 
-      auto cur_pose = queryPoseAtTime(tracker_pt.first);
+      auto cur_pose = queryPoseAtTime(tracker_pt.t);
 
       // Assemble train transformation matrix.
       Eigen::Affine3d T_body_to_world;
       tf2::fromMsg(cur_pose.pose.pose, T_body_to_world);
 
-      Eigen::Affine3d T_cam_to_world = T_body_to_world * T_cam_to_body_;
+      Eigen::Affine3d T_cam_to_world = T_body_to_world * cam_config_.T_cam_to_body;
 
       // Invert train transformation matrix to get world to camera
       Eigen::Affine3d T_world_to_cam = T_cam_to_world.inverse();
@@ -967,7 +1057,7 @@ void Detector::triangulateTracker(HeuristicTracker tracker) {
       T_world_to_cam_reduced(1, 2) = T_world_to_cam.translation()(2);
 
       // Everything needed for a DLT trianguaiton.
-      Eigen::Vector2d pixel_position(tracker_pt.second, 1);
+      Eigen::Vector2d pixel_position(tracker_pt.x, 1);
       pixel_pos.push_back(pixel_position);
       transformation_mats.push_back(T_world_to_cam_reduced);
     }
@@ -983,7 +1073,7 @@ void Detector::triangulateTracker(HeuristicTracker tracker) {
     A.resize(num_rows, 3);
     for (int i = 0; i < num_rows; i++) {
       // Convert pixel frame to cam frame.
-      double position = ((pixel_pos[i][0] - intrinsics_[2]) / intrinsics_[0]);
+      double position = ((pixel_pos[i][0] - cam_config_.intrinsics[2]) / cam_config_.intrinsics[0]);
       A.row(i) = position * transformation_mats[i].matrix().row(1) -
                  transformation_mats[i].matrix().row(0);
     }
@@ -998,24 +1088,24 @@ void Detector::triangulateTracker(HeuristicTracker tracker) {
     // ROS_INFO_STREAM("Min Val --> " << minSV);
     // ROS_INFO_STREAM("min p --> " << x);
 
-    if (minSV < FLAGS_triangulation_threshold) {
+    if (minSV < detector_config_.triangln_sv_thresh) {
       // Normalize homogenous coordinates.
       new_pole.pos_x = x[0] / x[2];
       new_pole.pos_y = x[1] / x[2];
 
       // Store new map point in file.
-      if (!FLAGS_map_output.empty() && map_file.is_open()) {
-        map_file << std::fixed << new_pole.ID << ","
-                 << "pole"
-                 << "," << new_pole.first_observed << "," << new_pole.pos_x << "," << new_pole.pos_y
-                 << ","
-                 << "0"
-                 << ","
-                 << "0" << std::endl;
+      if (!output_config_.map_file.empty() && map_file_.is_open()) {
+        map_file_ << std::fixed << new_pole.ID << ","
+                  << "pole"
+                  << "," << new_pole.first_observed << "," << new_pole.pos_x << ","
+                  << new_pole.pos_y << ","
+                  << "0"
+                  << ","
+                  << "0" << std::endl;
       }
 
       // && (new_pole.ID - 1) % 1 == 0
-      if (FLAGS_show_markers) {
+      if (output_config_.rviz) {
         const ros::Time ts_ = ros::Time();
 
         // Poles
@@ -1023,8 +1113,8 @@ void Detector::triangulateTracker(HeuristicTracker tracker) {
         pole_marker_.id = new_pole.ID;
         pole_marker_.pose.position.x = new_pole.pos_x;
         pole_marker_.pose.position.y = new_pole.pos_y;
-        pole_marker_.color.a =
-            0.2 + 0.8 * (FLAGS_triangulation_threshold - minSV) / FLAGS_triangulation_threshold;
+        pole_marker_.color.a = 0.2 + 0.8 * (detector_config_.triangln_sv_thresh - minSV) /
+                                         detector_config_.triangln_sv_thresh;
         pole_viz_pub_.publish(pole_marker_);
 
         // Calculate cam position
@@ -1061,7 +1151,7 @@ void Detector::triangulateTracker(HeuristicTracker tracker) {
 
 //   Eigen::MatrixXi tracked_maxima_neg;
 
-//   tracked_maxima_neg.resize(kHough1RadiusResolution, kHough2TimestepsPerMsg);
+//   tracked_maxima_neg.resize(hough1_config_.radial_resolution, kHough2TimestepsPerMsg);
 //   tracked_maxima_neg.setZero();
 
 //   const double kTimestampMsgBegin = feature_msg_.events[0].ts.toSec();
@@ -1125,7 +1215,7 @@ void Detector::triangulateTracker(HeuristicTracker tracker) {
 
 // #pragma omp parallel for
 //   for (int i = 0; i < hough2_queue_pos_.size(); i++) {
-//     for (int j = 0; j < kHough1RadiusResolution; j++) {
+//     for (int j = 0; j < hough1_config_.radial_resolution; j++) {
 //       for (int k = 0; k < kHough2TimestepsPerMsg; k++) {
 //         Eigen::Matrix<double, 2, 1> point;
 //         Eigen::Matrix<int, kHough2AngularResolution, 1> rho;
@@ -1230,54 +1320,54 @@ void Detector::triangulateTracker(HeuristicTracker tracker) {
 // }
 
 // Second Hough space non maximum suppression.
-void Detector::hough2nms(const int i, const int j, const Eigen::MatrixXi &hough_2_space,
-                         std::vector<cv::Vec3f> &detections) {
-  // Tuning parameter for enforcing separation of maxima.
-  const float kMinAngleSep =
-      FLAGS_hough_2_nms_min_angle_separation * FLAGS_hough_2_nms_min_angle_separation;
-  const float kMinRadiusSep =
-      FLAGS_hough_2_nms_min_rho_separation * FLAGS_hough_2_nms_min_rho_separation;
+// void Detector::hough2nms(const int i, const int j, const Eigen::MatrixXi &hough_2_space,
+//                          std::vector<cv::Vec3f> &detections) {
+//   // Tuning parameter for enforcing separation of maxima.
+//   const float kMinAngleSep =
+//       FLAGS_hough_2_nms_min_angle_separation * FLAGS_hough_2_nms_min_angle_separation;
+//   const float kMinRadiusSep =
+//       FLAGS_hough_2_nms_min_rho_separation * FLAGS_hough_2_nms_min_rho_separation;
 
-  if (hough_2_space(j, i) > FLAGS_hough_2_min_threshold) {
-    if (isLocalMaxima(hough_2_space, i, j)) {
-      cv::Vec3f new_vector;
-      new_vector[0] = j;
-      new_vector[1] = thetas_2_(i);
-      new_vector[2] = hough_2_space(j, i);
+//   if (hough_2_space(j, i) > FLAGS_hough_2_min_threshold) {
+//     if (isLocalMaxima(hough_2_space, i, j)) {
+//       cv::Vec3f new_vector;
+//       new_vector[0] = j;
+//       new_vector[1] = thetas_2_(i);
+//       new_vector[2] = hough_2_space(j, i);
 
-      // Check if lines already exist.
-      if (detections.size() > 0) {
-        bool add_to_list = true;
-        for (size_t k = 0; k < detections.size(); k++) {
-          const float kRho = detections[k][0];
-          const float kTheta = detections[k][1];
-          const float kVal = detections[k][2];
+//       // Check if lines already exist.
+//       if (detections.size() > 0) {
+//         bool add_to_list = true;
+//         for (size_t k = 0; k < detections.size(); k++) {
+//           const float kRho = detections[k][0];
+//           const float kTheta = detections[k][1];
+//           const float kVal = detections[k][2];
 
-          const float kCurAngleSeparation = (kTheta - new_vector[1]) * (kTheta - new_vector[1]);
-          const float kCurRadiusSeparation = (kRho - new_vector[0]) * (kRho - new_vector[0]);
+//           const float kCurAngleSeparation = (kTheta - new_vector[1]) * (kTheta - new_vector[1]);
+//           const float kCurRadiusSeparation = (kRho - new_vector[0]) * (kRho - new_vector[0]);
 
-          // If line is close, check which is larger.
-          if ((kCurAngleSeparation < kMinAngleSep) && (kCurRadiusSeparation < kMinRadiusSep)) {
-            add_to_list = false;
+//           // If line is close, check which is larger.
+//           if ((kCurAngleSeparation < kMinAngleSep) && (kCurRadiusSeparation < kMinRadiusSep)) {
+//             add_to_list = false;
 
-            // overwrite or discard
-            if (new_vector[2] > kVal) {
-              detections[k] = new_vector;
-            }
-          }
-        }
+//             // overwrite or discard
+//             if (new_vector[2] > kVal) {
+//               detections[k] = new_vector;
+//             }
+//           }
+//         }
 
-        // If none was bigger, add to the end.
-        if (add_to_list) {
-          detections.push_back(new_vector);
-        }
-      } else {
-        // First line, so add it.
-        detections.push_back(new_vector);
-      }
-    }
-  }
-}
+//         // If none was bigger, add to the end.
+//         if (add_to_list) {
+//           detections.push_back(new_vector);
+//         }
+//       } else {
+//         // First line, so add it.
+//         detections.push_back(new_vector);
+//       }
+//     }
+//   }
+// }
 
 // Event preprocessing prior to first HT.
 void Detector::eventPreProcessing(const dvs_msgs::EventArray::ConstPtr &orig_msg,
@@ -1291,7 +1381,7 @@ void Detector::eventPreProcessing(const dvs_msgs::EventArray::ConstPtr &orig_msg
   //
   // Also would be faster to just preallocate the eigen matrix to max
   // size and write directly into it and afterwards resize.
-  for (int i = 0; i < num_events; i += FLAGS_event_subsample_factor) {
+  for (int i = 0; i < num_events; i += detector_config_.evt_subsample_fac) {
     const dvs_msgs::Event &e = orig_msg->events[i];
 
     // Seemingly broken pixels in the DVS (millions of exactly equal events at
@@ -1310,7 +1400,7 @@ void Detector::eventPreProcessing(const dvs_msgs::EventArray::ConstPtr &orig_msg
 
   // Check there are enough events for our window size. This is only relevant
   // during initialization.
-  if (num_events <= FLAGS_hough_1_window_size) {
+  if (num_events <= hough1_config_.window_size) {
     return;
   }
 
@@ -1322,13 +1412,13 @@ void Detector::eventPreProcessing(const dvs_msgs::EventArray::ConstPtr &orig_msg
   const auto ptr = points.data();
   CHECK_NOTNULL(ptr);
 
-  if (FLAGS_perform_camera_undistortion) {
+  if (cam_config_.perform_undist) {
 #pragma omp parallel for
     for (int i = 0; i < num_events; i++) {
       const dvs_msgs::Event &event = feature_msg_.events[i];
 
-      *(ptr + 2 * i) = undist_map_x_(event.y, event.x);
-      *(ptr + 2 * i + 1) = undist_map_y_(event.y, event.x);
+      *(ptr + 2 * i) = cam_config_.undist_map_x(event.y, event.x);
+      *(ptr + 2 * i + 1) = cam_config_.undist_map_y(event.y, event.x);
     }
   } else {
 #pragma omp parallel for
@@ -1345,9 +1435,11 @@ void Detector::eventPreProcessing(const dvs_msgs::EventArray::ConstPtr &orig_msg
 // void Detector::visualizeSecondHoughSpace(const std::vector<cv::Vec3f> &kDetectionsPos,
 //                                          const std::vector<cv::Vec3f> &kDetectionsNeg) {
 //   // Window for visualization.
-//   cv::Mat line_space_pos(kHough1RadiusResolution, kHough2MsgPerWindow * kHough2TimestepsPerMsg,
+//   cv::Mat line_space_pos(hough1_config_.radial_resolution, kHough2MsgPerWindow *
+//   kHough2TimestepsPerMsg,
 //                          CV_8UC1, 1);
-//   cv::Mat line_space_neg(kHough1RadiusResolution, kHough2MsgPerWindow * kHough2TimestepsPerMsg,
+//   cv::Mat line_space_neg(hough1_config_.radial_resolution, kHough2MsgPerWindow *
+//   kHough2TimestepsPerMsg,
 //                          CV_8UC1, 1);
 
 // #pragma omp parallel for
@@ -1391,14 +1483,15 @@ void Detector::eventPreProcessing(const dvs_msgs::EventArray::ConstPtr &orig_msg
 // }
 
 void Detector::visualizeTracker() {
-  int num_cols = kHough2MsgPerWindow * kHough2TimestepsPerMsg;
-  cv::Mat line_space_neg(kHough1RadiusResolution, num_cols, CV_8UC1, 1);
+  int num_cols = detector_config_.msg_per_window * detector_config_.tsteps_per_msg;
+  cv::Mat line_space_neg(hough1_config_.radial_resolution, num_cols, CV_8UC1, 1);
 
 #pragma omp parallel for
-  for (int i = 0; i < hough2_queue_neg_.size(); i++) {
-    for (int j = 0; j < hough2_queue_neg_[i].rows(); j++) {
-      for (int k = 0; k < kHough2TimestepsPerMsg; k++) {
-        line_space_neg.at<uchar>(j, i * kHough2TimestepsPerMsg + k, 0) = hough2_queue_neg_[i](j, k);
+  for (int i = 0; i < houghout_queue_.size(); i++) {
+    for (int j = 0; j < houghout_queue_[i].rows(); j++) {
+      for (int k = 0; k < detector_config_.tsteps_per_msg; k++) {
+        line_space_neg.at<uchar>(j, i * detector_config_.tsteps_per_msg + k, 0) =
+            houghout_queue_[i](j, k);
       }
     }
   }
@@ -1412,26 +1505,32 @@ void Detector::visualizeTracker() {
     }
   }
 
-  // Draw Tracker Lines
-  const double kColumnLengthInSec = (1.0 / kEventArrayFrequency) / (kHough2TimestepsPerMsg);
+  // Clean up tracker viz
+  while (viz_trackers_.size() >= 5) {
+    viz_trackers_.pop_front();
+  }
 
-  for (auto &&tracker : trackers_) {
+  // Draw Tracker Lines
+  const double kColumnLengthInSec =
+      (1.0 / cam_config_.evt_arr_frequency) / (detector_config_.tsteps_per_msg);
+
+  for (auto &&tracker : viz_trackers_) {
     if (tracker.length() > 5) {
       auto tracked_points = tracker.getPoints();
       // for (int i = 0; i < 1; i++) {
       for (int i = 0; i < tracker.length() - 1; i++) {
-        if (tracked_points[i + 1].first - tracked_points[i].first > kColumnLengthInSec) {
+        if (tracked_points[i + 1].t - tracked_points[i].t > kColumnLengthInSec) {
           int p1_t_index =
               num_cols - 1 -
-              (int)((hough2_queue_last_t - tracked_points[i].first) / kColumnLengthInSec);
+              (int)((houghout_queue_last_t - tracked_points[i].t) / kColumnLengthInSec);
           int p2_t_index =
               num_cols - 1 -
-              (int)((hough2_queue_last_t - tracked_points[i + 1].first) / kColumnLengthInSec);
+              (int)((houghout_queue_last_t - tracked_points[i + 1].t) / kColumnLengthInSec);
           CHECK_LT(p1_t_index, p2_t_index);
           if (p1_t_index >= 0 and p2_t_index < num_cols) {
             // Plot only if lines visible in time buffer space
-            cv::Point p1(p1_t_index, tracked_points[i].second);
-            cv::Point p2(p2_t_index, tracked_points[i + 1].second);
+            cv::Point p1(p1_t_index, tracked_points[i].x);
+            cv::Point p2(p2_t_index, tracked_points[i + 1].x);
             cv::line(line_space_neg, p1, p2, cv::Scalar(0, 255, 255), 1, cv::LINE_AA);
           }
         };
@@ -1443,8 +1542,7 @@ void Detector::visualizeTracker() {
   cv::flip(line_space_neg, line_space_neg, 0);
   cv::rotate(line_space_neg, line_space_neg, cv::ROTATE_90_CLOCKWISE);
 
-  hough2_img_pub_.publish(
-      cv_bridge::CvImage(std_msgs::Header(), "bgr8", line_space_neg).toImageMsg());
+  xt_img_pub_.publish(cv_bridge::CvImage(std_msgs::Header(), "bgr8", line_space_neg).toImageMsg());
 }
 
 void Detector::drawPolarCorLine(cv::Mat &image_space, float rho, float theta, cv::Scalar color) {
@@ -1463,11 +1561,10 @@ void Detector::addMaximaInRadius(int i, int radius, const Eigen::MatrixXi &total
                                  int local_threshold, double timestamp,
                                  std::vector<hough2map::HoughLine> *new_maxima,
                                  std::vector<int> *new_maxima_value, bool skip_center) {
-  int m_l = std::max(i - FLAGS_hough_space_NMS_suppression_radius, 0);
-  int m_r = std::min(i + FLAGS_hough_space_NMS_suppression_radius + 1, kHough1AngularResolution);
-  int n_l = std::max(radius - FLAGS_hough_space_NMS_suppression_radius, 0);
-  int n_r =
-      std::min(radius + FLAGS_hough_space_NMS_suppression_radius + 1, kHough1RadiusResolution);
+  int m_l = std::max(i - hough1_config_.nms_radius, 0);
+  int m_r = std::min(i + hough1_config_.nms_radius + 1, hough1_config_.angular_resolution);
+  int n_l = std::max(radius - hough1_config_.nms_radius, 0);
+  int n_r = std::min(radius + hough1_config_.nms_radius + 1, hough1_config_.radial_resolution);
 
   for (int m = m_l; m < m_r; m++) {
     for (int n = n_l; n < n_r; n++) {
@@ -1527,8 +1624,7 @@ void Detector::applySuppressionRadius(const std::vector<hough2map::HoughLine> &n
                        (cur_maximum.theta_idx - new_maximum.theta_idx) *
                            (cur_maximum.theta_idx - new_maximum.theta_idx);
 
-      if (distance <
-          FLAGS_hough_space_NMS_suppression_radius * FLAGS_hough_space_NMS_suppression_radius) {
+      if (distance < hough1_config_.nms_radius * hough1_config_.nms_radius) {
         add_maximum = false;
         break;
       }
@@ -1592,16 +1688,16 @@ std::vector<int> Detector::getClusteringCentroids(Eigen::VectorXi detections) {
   for (int i = 0; i < detections.size(); i++) {
     value_sum += detections(i);
     weighted_sum += detections(i) * i;
-    if (value_sum >= kTrackerCentroidThreshold) {
+    if (value_sum >= detector_config_.centroid_find_thresh) {
       // Calculate current centroid and append to last_n_centroids
       int current_centroid = (int)(weighted_sum / value_sum);
       last_n_centroids.push_back(current_centroid);
-      if (last_n_centroids.size() > kTrackerCentroidWindowSize) {
+      if (last_n_centroids.size() > detector_config_.centroid_find_window) {
         last_n_centroids.pop_front();
       }
       // Check if the centroid has not moved
-      if (value_sum >= kTrackerCentroidThreshold &&
-          last_n_centroids.size() == kTrackerCentroidWindowSize &&
+      if (value_sum >= detector_config_.centroid_find_thresh &&
+          last_n_centroids.size() == detector_config_.centroid_find_window &&
           (last_n_centroids.back() - last_n_centroids.front()) <= 1) {
         // If so, add a cluster centroid
         int add_centroid = last_n_centroids.front();
@@ -1713,8 +1809,9 @@ std::vector<int> Detector::getClusteringCentroids(Eigen::VectorXi detections) {
 //       A.resize(num_rows, 3);
 //       for (int i = 0; i < num_rows; i++) {
 //         // Convert pixel frame to cam frame.
-//         double position = ((pixel_pos[i][0] - intrinsics_[2]) / intrinsics_[0]);
-//         A.row(i) = position * transformation_mats[i].matrix().row(1) -
+//         double position = ((pixel_pos[i][0] - cam_config_.intrinsics[2]) /
+//         cam_config_.intrinsics[0]); A.row(i) = position * transformation_mats[i].matrix().row(1)
+//         -
 //                    transformation_mats[i].matrix().row(0);
 //       }
 //       // Singular Value decomposition.
@@ -1734,7 +1831,7 @@ std::vector<int> Detector::getClusteringCentroids(Eigen::VectorXi detections) {
 //         new_pole.pos_y = x[1] / x[2];
 
 //         // Store new map point in file.
-//         if (!FLAGS_map_output.empty() && map_file.is_open()) {
+//         if (!output_config_.map_file.empty() && map_file.is_open()) {
 //           map_file << std::fixed << new_pole.ID << ","
 //                    << "pole"
 //                    << "," << new_pole.first_observed << "," << new_pole.pos_x << ","

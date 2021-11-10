@@ -1,9 +1,9 @@
-%YAML:1.0
-cam0:
-  cam_overlaps: []
+cam:
   camera_model: pinhole
   distortion_coeffs: [-0.09798194451582616, 0.2097934453326764, -0.0003578417123372964, 6.716111923650996e-05]
   distortion_model: radtan
+  distortion_acceptable: 40.0
+  distorted: false
   intrinsics: [556.7176612320709, 556.5737848320229, 342.4201113309635, 215.1085137623697]
   resolution: [640, 480]
   events_frequency: 20
