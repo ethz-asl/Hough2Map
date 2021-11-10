@@ -6,51 +6,10 @@
 #include <chrono>
 #include <thread>
 
-// DEFINE_int32(hough_1_threshold, 15, "Threshold for the first level Hough transform.");
-// DEFINE_int32(hough_1_window_size, 300, "Max queue length for the first Hough transform.");
-// DEFINE_int32(hough_space_NMS_suppression_radius, 10,
-//              "Non-Maximum-Suppression suppression radius to enforce Maxima separation");
-// DEFINE_int32(hough_2_min_threshold, 7000, "Minimal Threshold for the second Hough transform");
-// DEFINE_bool(show_lines_in_video, false, "Plot detected lines in the video stream");
-// DEFINE_bool(show_markers, false, "Plot detected lines in the video stream");
-// DEFINE_bool(display_2nd_hough_space, false, "Display the current 2nd degree hough Space");
-// DEFINE_bool(odometry_available, true, "A GPS Odometry is available");
-// DEFINE_double(odometry_event_alignment, 0,
-//               "Manual time synchronization to compensate misalignment between "
-//               "odometry and DVS timestamps");
-// DEFINE_bool(perform_camera_undistortion, true,
-//             "Undistort event data according to camera calibration");
-// DEFINE_int32(event_subsample_factor, 1, "Subsample Events by a constant factor");
-// DEFINE_double(buffer_size_s, 30, "Size of the odometry buffer in seconds");
-// DEFINE_double(triangulation_threshold, 0.05,
-//               "Threshold for Minimal Singular Value to qualify successful triangulation");
-// DEFINE_double(hough_2_nms_min_angle_separation, 20.0,
-//               "The suppression radius in the Non-maximum-suppression for the "
-//               "second Hough Transform for angles..");
-// DEFINE_double(hough_2_nms_min_rho_separation, 50.0,
-//               "The suppression radius in the Non-maximum-suppression for the "
-//               "second Hough Transform for pixel separation.");
-// DEFINE_double(hough_2_nms_neg_pos_angular_matching, 0.05,
-//               "Angular separation between a positive and a negative pole detection for "
-//               "them to be confirmed as a pole detection. Value is in radians sqared.");
-// DEFINE_double(hough_2_nms_neg_pos_radial_matching, 2500,
-//               "Radial separation between a positive and a negative pole detection for "
-//               "them to be confirmed as a pole detection. Value is in pixels sqared.");
-// DEFINE_string(lines_output, "", "Output detected lines to a file");
-// DEFINE_string(map_output, "", "Export detected poles to file");
-// DEFINE_string(calibration_profile, "rail", "Profile to use for calibration");
-
 namespace hough2map {
 Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
                    const image_transport::ImageTransport &img_pipe)
     : nh_(nh), nh_private_(nh_private), img_pipe_(img_pipe) {
-  // Checking that flags have reasonable values.
-  // CHECK_GE(FLAGS_hough_1_window_size, 1);
-  // CHECK_GT(FLAGS_event_subsample_factor, 0);
-  // CHECK_GE(FLAGS_buffer_size_s, 1);
-  // CHECK_GT(FLAGS_hough_1_threshold, 0);
-  // CHECK_GT(FLAGS_hough_2_min_threshold, 0);
-
   // Load Calibration
   loadCamConfigFromParams();
 
@@ -59,17 +18,6 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
 
   // Configure Tracker Manager
   tracker_mgr_.init(tracker_mgr_config_);
-
-  // File output for the line parameters of the lines in the event stream.
-  // if (!FLAGS_lines_output.empty()) {
-  //   lines_file.open(FLAGS_lines_output);
-
-  //   if (lines_file.is_open()) {
-  //     lines_file << "time,param,pol\n";
-  //   } else {
-  //     LOG(FATAL) << "Could not open file:" << FLAGS_lines_output << std::endl;
-  //   }
-  // }
 
   // Output file for the map data.
   if (!output_config_.map_file.empty()) {
@@ -90,9 +38,6 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
 
   // TrackerPole counter
   pole_count_ = 1;
-
-  // Import calibration file.
-  // loadCalibration();
 
   // Update Hough1 resolutions
   hough1_config_.radial_resolution = (int)(cam_config_.cam_res_width * 1.1);
@@ -173,11 +118,6 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
 }
 
 Detector::~Detector() {
-  // Close all open files.
-  // if (!FLAGS_lines_output.empty() && lines_file.is_open()) {
-  //   lines_file.close();
-  // }
-
   if (!output_config_.map_file.empty() && map_file_.is_open()) {
     map_file_.close();
   }
@@ -203,63 +143,6 @@ void Detector::initializeSinCosMap(Eigen::EigenBase<DerivedVec> &angles,
     sin_cos_map.derived()(i, 1) = sin(angles.derived()(i));
   }
 }
-
-// void Detector::loadCalibration() {
-//   // File path to calibration file.
-//   std::string package_path = ros::package::getPath("hough2map");
-//   std::string calibration_file = package_path + "/share/" + FLAGS_calibration_profile + ".yaml";
-
-//   cv::FileStorage fs(calibration_file, cv::FileStorage::READ);
-
-//   if (!fs.isOpened()) {
-//     LOG(FATAL) << "Could not open calibration file:" << calibration_file << std::endl;
-//   }
-
-//   // Import parameters from calibration file.
-//   cv::FileNode cam = fs["cam0"];
-
-//   // First, let's import the sensor resolution.
-//   cv::FileNode resolution = cam["resolution"];
-//   CHECK_EQ(resolution.size(), 2) << ": Not enough calibration data regarding sensor size!";
-
-//   // Importing sensor resolution.
-//   kCameraResolutionWidth = resolution[0];
-//   kCameraResolutionHeight = resolution[1];
-
-//   kEventArrayFrequency = cam["events_frequency"];
-
-//   // Importing camera intrinsics. Expecting 4 values.
-//   CHECK_EQ(cam["intrinsics"].size(), 4)
-//       << ": Not enough calibration data regarding sensor intrinsics!";
-//   cv::FileNodeIterator it = cam["intrinsics"].begin(), it_end = cam["intrinsics"].end();
-//   int i = 0;
-//   for (; it != it_end; ++it) {
-//     intrinsics_[i] = (*it).real();
-//     i++;
-//   }
-
-//   CHECK_EQ(cam["cam_to_body"].size(), 16)
-//       << ": Not enough extrinsics, 16 values expected (row major)!";
-//   cv::FileNodeIterator et = cam["cam_to_body"].begin(), et_end = cam["cam_to_body"].end();
-//   i = 0;
-//   // Load column major and transpose it
-//   Eigen::Matrix<double, 4, 4> flatExtrinsics;
-//   for (; et != et_end; ++et) {
-//     flatExtrinsics(i) = (*et).real();
-//     i++;
-//   }
-//   T_cam_to_body_.matrix() = flatExtrinsics.transpose();
-
-//   // Importing the distortion coefficients, again expecting 4 values.
-//   CHECK_EQ(cam["distortion_coeffs"].size(), 4)
-//       << ": Not enough calibration data regarding distortion coefficients!";
-//   it = cam["distortion_coeffs"].begin(), it_end = cam["distortion_coeffs"].end();
-//   i = 0;
-//   for (; it != it_end; ++it) {
-//     distortion_coeffs_[i] = (*it).real();
-//     i++;
-//   }
-// }
 
 void Detector::loadCamConfigFromParams() {
   bool ld = true;
@@ -360,8 +243,6 @@ void Detector::loadConfigFromParams() {
     ROS_INFO_STREAM("All Params loaded!");
   }
 }
-
-void Detector::deriveConfigs() {}
 
 void Detector::computeUndistortionMapping() {
   // Setup camera intrinsics from calibration file.
@@ -1014,8 +895,6 @@ void Detector::heuristicTrack(
 }
 
 void Detector::triangulateTracker(Tracker tracker) {
-  // ROS_INFO_STREAM("New Triangulation");
-
   auto tracker_points = tracker.getPoints();
 
   TrackerPole new_pole;
@@ -1085,9 +964,6 @@ void Detector::triangulateTracker(Tracker tracker) {
     Eigen::Vector3d x = svd.matrixV().col(n_);
     double minSV = svd.singularValues()(n_);
 
-    // ROS_INFO_STREAM("Min Val --> " << minSV);
-    // ROS_INFO_STREAM("min p --> " << x);
-
     if (minSV < detector_config_.triangln_sv_thresh) {
       // Normalize homogenous coordinates.
       new_pole.pos_x = x[0] / x[2];
@@ -1137,237 +1013,6 @@ void Detector::triangulateTracker(Tracker tracker) {
     }
   }
 }
-
-// Apply the scond Hough tranform.
-// void Detector::secondHoughTransform(
-//     const std::vector<std::vector<hough2map::HoughLine>> &cur_maxima_list) {
-//   int num_events = feature_msg_.events.size();
-
-//   // Second Hough tranform. x-t-space
-//   // Track the obtained maxima over time.
-
-//   // Step 1: Reshape maxima list into x-t data.
-//   // Step 2: Discretizing maxima into timesteps.
-
-//   Eigen::MatrixXi tracked_maxima_neg;
-
-//   tracked_maxima_neg.resize(hough1_config_.radial_resolution, kHough2TimestepsPerMsg);
-//   tracked_maxima_neg.setZero();
-
-//   const double kTimestampMsgBegin = feature_msg_.events[0].ts.toSec();
-
-//   CHECK_GT(kHough2TimestepsPerMsg, 0);
-//   const double kColumnLengthInSec = (1.0 / FLAGS_event_array_frequency) /
-//   (kHough2TimestepsPerMsg);
-
-//   for (int i = 0; i < num_events; i++) {
-//     const dvs_msgs::Event &e = feature_msg_.events[i];
-//     for (auto &maxima : cur_maxima_list[i]) {
-//       // Not every message is exactly 33ms long. To deal with this, we currently
-//       // squeeze longer messages down to be 33ms long.
-
-//       const int time_idx =
-//           std::min((int)std::floor((e.ts.toSec() - kTimestampMsgBegin) / kColumnLengthInSec),
-//                    kHough2TimestepsPerMsg - 1);
-
-//       CHECK_LT(time_idx, kHough2TimestepsPerMsg)
-//           << ": Something wrong with the time index!" + time_idx;
-
-//       // This discretizes the maxima. Many will be same or super close, so we
-//       // accumulate them.
-
-//       tracked_maxima_neg(maxima.r, time_idx)++;
-//     }
-//   }
-
-//   // Ok, all the maxima are nicely arranged. Now I can do another Hough
-//   // transform with them,but first I want to look at them I need to establish
-//   // a window of points.
-
-//   // All maxima are now arranged in the current time window and discretized to
-//   // reduce the required computation time. We can now apply the next Hough
-//   // Transform.
-
-//   // Size of window depending on number of messages in window, assuming 30
-//   // messages per second.
-
-//   const double kWindowSizeInSec = kHough2MsgPerWindow / FLAGS_event_array_frequency;
-
-//   const double kWindowEndTime = feature_msg_.events[num_events - 1].ts.toSec();
-
-//   // Window for data storage.
-//   hough2_queue_neg_.push_back(tracked_maxima_neg);
-
-//   // Removing old stuff when the window is full.
-//   if (hough2_queue_neg_.size() > kHough2MsgPerWindow) {
-//     hough2_queue_neg_.pop_front();
-//   }
-
-//   // Initializing Hough spaces for the 2nd HT.
-//   const int test = kHough2AngularResolution;
-//   Eigen::MatrixXi hough_2_space_pos(kHough2MsgPerWindow * kHough2TimestepsPerMsg, test);
-//   Eigen::MatrixXi hough_2_space_neg(kHough2MsgPerWindow * kHough2TimestepsPerMsg, test);
-
-//   hough_2_space_pos.setZero();
-//   hough_2_space_neg.setZero();
-
-//   // For every message in the window.
-
-// #pragma omp parallel for
-//   for (int i = 0; i < hough2_queue_pos_.size(); i++) {
-//     for (int j = 0; j < hough1_config_.radial_resolution; j++) {
-//       for (int k = 0; k < kHough2TimestepsPerMsg; k++) {
-//         Eigen::Matrix<double, 2, 1> point;
-//         Eigen::Matrix<int, kHough2AngularResolution, 1> rho;
-
-//         point(0, 0) = i * kHough2TimestepsPerMsg + k;
-//         point(1, 0) = j;
-
-//         // Accumulated maxima from the discretization step now function as
-//         // weights for the HT.
-//         const int kHough2WeightsPos = hough2_queue_pos_[i](j, k);
-//         const int kHough2WeightsNeg = hough2_queue_neg_[i](j, k);
-
-//         rho = (polar_param_mapping_2_ * point).cast<int>();
-
-//         // For every angle.
-//         for (int l = 0; l < kHough2AngularResolution; l++) {
-//           // Do Hough transform.
-//           if ((rho(l, 0) > 0) && (rho(l, 0) < kHough2MsgPerWindow * kHough2TimestepsPerMsg)) {
-//             hough_2_space_pos(rho(l, 0), l) += kHough2WeightsPos;
-//             hough_2_space_neg(rho(l, 0), l) += kHough2WeightsNeg;
-//           }
-//         }
-//       }
-//     }
-//   }
-
-//   std::vector<cv::Vec3f> detected_lines_pos;
-//   std::vector<cv::Vec3f> detected_lines_neg;
-
-//   // Tuning parameter for enforcing separation of maxima.
-//   const float kMinAngleSep =
-//       FLAGS_hough_2_nms_min_angle_separation * FLAGS_hough_2_nms_min_angle_separation;
-//   const float kMinRadiusSep =
-//       FLAGS_hough_2_nms_min_rho_separation * FLAGS_hough_2_nms_min_rho_separation;
-
-//   for (int i = 0; i < kHough2AngularResolution; i++) {
-//     for (int j = 0; j < kHough2MsgPerWindow * kHough2TimestepsPerMsg; j++) {
-//       // Checking positive Hough space.
-//       hough2nms(i, j, hough_2_space_pos, detected_lines_pos);
-
-//       // Checking negative Hough space.
-//       hough2nms(i, j, hough_2_space_neg, detected_lines_neg);
-//     }
-//   }
-
-//   // At this point we check whether positive and negative line detections line
-//   // up. If there is a pole infront of the camera, there will be a positive and
-//   // a negative detection in parallel an close proximity from the two
-//   // edges of the pole. If it is another object, such as a building or
-//   // bridge, these two edges will be separated much further.
-//   for (size_t i = 0; i < detected_lines_pos.size(); i++) {
-//     // Parameters of current positive line.
-//     const float kRhoPos = detected_lines_pos[i][0];
-//     const float kThetaPos = detected_lines_pos[i][1];
-//     // Compare against all current negative lines (typically there are only a
-//     // hand full of lines simultaneously, so not so expensive).
-//     for (size_t j = 0; j < detected_lines_neg.size(); j++) {
-//       const float kRhoNeg = detected_lines_neg[j][0];
-//       const float kThetaNeg = detected_lines_neg[j][1];
-
-//       const float kPosNegRadiusSeparation = (kRhoPos - kRhoNeg) * (kRhoPos - kRhoNeg);
-//       const float kPosNegAngularSeparation = (kThetaPos - kThetaNeg) * (kThetaPos - kThetaNeg);
-
-//       // If the two lines are nearly parallel and relativity close to each other
-//       // pixel wise, they are approved to be a pole detection.
-//       if ((kPosNegAngularSeparation < FLAGS_hough_2_nms_neg_pos_angular_matching) &&
-//           (kPosNegRadiusSeparation < FLAGS_hough_2_nms_neg_pos_radial_matching)) {
-//         // Compute pole timestamps. I need the pole speed in px/s and a
-//         // timestamp for finding the according train speed.
-
-//         double timestamp_enter;
-//         double timestamp_leave;
-//         const double kWindowTimestampBeginning = kWindowEndTime - kWindowSizeInSec;
-
-//         timestamp_leave = (1 / cos(kThetaPos)) * (kRhoPos);
-//         timestamp_enter =
-//             (1 / cos(kThetaPos)) * (kRhoPos - kHough2AngularResolution * sin(kThetaPos));
-
-//         timestamp_enter =
-//             (timestamp_enter / (kHough2MsgPerWindow * kHough2TimestepsPerMsg)) * kWindowSizeInSec
-//             + kWindowTimestampBeginning;
-//         timestamp_leave =
-//             (timestamp_leave / (kHough2MsgPerWindow * kHough2TimestepsPerMsg)) * kWindowSizeInSec
-//             + kWindowTimestampBeginning;
-
-//         CHECK_GT(timestamp_leave, timestamp_enter)
-//             << ":Timestamps seem to be wrong, the pole leaves before it "
-//                "enters?!";
-
-//         // If an odometry is available, we can triangulate the new pole.
-//         if (FLAGS_odometry_available) {
-//           newPoleDetection(kRhoPos, kThetaPos, kWindowTimestampBeginning, true);
-//         }
-//       }
-//     }
-//   }
-
-//   // Plot the lines.
-//   if (FLAGS_display_2nd_hough_space) {
-//     visualizeSecondHoughSpace(detected_lines_pos, detected_lines_neg);
-//   }
-// }
-
-// Second Hough space non maximum suppression.
-// void Detector::hough2nms(const int i, const int j, const Eigen::MatrixXi &hough_2_space,
-//                          std::vector<cv::Vec3f> &detections) {
-//   // Tuning parameter for enforcing separation of maxima.
-//   const float kMinAngleSep =
-//       FLAGS_hough_2_nms_min_angle_separation * FLAGS_hough_2_nms_min_angle_separation;
-//   const float kMinRadiusSep =
-//       FLAGS_hough_2_nms_min_rho_separation * FLAGS_hough_2_nms_min_rho_separation;
-
-//   if (hough_2_space(j, i) > FLAGS_hough_2_min_threshold) {
-//     if (isLocalMaxima(hough_2_space, i, j)) {
-//       cv::Vec3f new_vector;
-//       new_vector[0] = j;
-//       new_vector[1] = thetas_2_(i);
-//       new_vector[2] = hough_2_space(j, i);
-
-//       // Check if lines already exist.
-//       if (detections.size() > 0) {
-//         bool add_to_list = true;
-//         for (size_t k = 0; k < detections.size(); k++) {
-//           const float kRho = detections[k][0];
-//           const float kTheta = detections[k][1];
-//           const float kVal = detections[k][2];
-
-//           const float kCurAngleSeparation = (kTheta - new_vector[1]) * (kTheta - new_vector[1]);
-//           const float kCurRadiusSeparation = (kRho - new_vector[0]) * (kRho - new_vector[0]);
-
-//           // If line is close, check which is larger.
-//           if ((kCurAngleSeparation < kMinAngleSep) && (kCurRadiusSeparation < kMinRadiusSep)) {
-//             add_to_list = false;
-
-//             // overwrite or discard
-//             if (new_vector[2] > kVal) {
-//               detections[k] = new_vector;
-//             }
-//           }
-//         }
-
-//         // If none was bigger, add to the end.
-//         if (add_to_list) {
-//           detections.push_back(new_vector);
-//         }
-//       } else {
-//         // First line, so add it.
-//         detections.push_back(new_vector);
-//       }
-//     }
-//   }
-// }
 
 // Event preprocessing prior to first HT.
 void Detector::eventPreProcessing(const dvs_msgs::EventArray::ConstPtr &orig_msg,
@@ -1430,57 +1075,6 @@ void Detector::eventPreProcessing(const dvs_msgs::EventArray::ConstPtr &orig_msg
     }
   }
 }
-
-// Function for visualizing the current second Hough Space.
-// void Detector::visualizeSecondHoughSpace(const std::vector<cv::Vec3f> &kDetectionsPos,
-//                                          const std::vector<cv::Vec3f> &kDetectionsNeg) {
-//   // Window for visualization.
-//   cv::Mat line_space_pos(hough1_config_.radial_resolution, kHough2MsgPerWindow *
-//   kHough2TimestepsPerMsg,
-//                          CV_8UC1, 1);
-//   cv::Mat line_space_neg(hough1_config_.radial_resolution, kHough2MsgPerWindow *
-//   kHough2TimestepsPerMsg,
-//                          CV_8UC1, 1);
-
-// #pragma omp parallel for
-//   for (int i = 0; i < hough2_queue_pos_.size(); i++) {
-//     for (int j = 0; j < hough2_queue_pos_[i].rows(); j++) {
-//       for (int k = 0; k < kHough2TimestepsPerMsg; k++) {
-//         line_space_pos.at<uchar>(j, i * kHough2TimestepsPerMsg + k, 0) = hough2_queue_pos_[i](j,
-//         k);
-//       }
-//     }
-//     for (int j = 0; j < hough2_queue_neg_[i].rows(); j++) {
-//       for (int k = 0; k < kHough2TimestepsPerMsg; k++) {
-//         line_space_neg.at<uchar>(j, i * kHough2TimestepsPerMsg + k, 0) = hough2_queue_neg_[i](j,
-//         k);
-//       }
-//     }
-//   }
-
-//   cv::cvtColor(line_space_pos, line_space_pos, cv::COLOR_GRAY2BGR);
-//   cv::cvtColor(line_space_neg, line_space_neg, cv::COLOR_GRAY2BGR);
-
-//   for (size_t i = 0; i < kDetectionsPos.size(); i++) {
-//     float rho = kDetectionsPos[i][0], theta = kDetectionsPos[i][1];
-//     drawPolarCorLine(line_space_pos, rho, theta, cv::Scalar(255, 0, 0));
-//   }
-
-//   for (size_t i = 0; i < kDetectionsNeg.size(); i++) {
-//     float rho = kDetectionsNeg[i][0], theta = kDetectionsNeg[i][1];
-//     drawPolarCorLine(line_space_neg, rho, theta, cv::Scalar(0, 0, 255));
-//   }
-
-//   // Flip image for nicer viewing.
-//   cv::Mat out;
-
-//   cv::flip(line_space_pos, line_space_pos, 0);
-//   cv::flip(line_space_neg, line_space_neg, 0);
-
-//   cv::vconcat(line_space_pos, line_space_neg, out);
-
-//   hough2_img_pub_.publish(cv_bridge::CvImage(std_msgs::Header(), "bgr8", out).toImageMsg());
-// }
 
 void Detector::visualizeTracker() {
   int num_cols = detector_config_.msg_per_window * detector_config_.tsteps_per_msg;
@@ -1713,169 +1307,6 @@ std::vector<int> Detector::getClusteringCentroids(Eigen::VectorXi detections) {
 
   return cluster_centroids;
 }
-
-// void Detector::newPoleDetection(double rho, double theta, double window_time) {
-//   // Creating new pole object. This is on the one hand legacy code, on the
-//   // other hand ready for future on the go map storage, or something like
-//   // that.
-//   TrackerPole new_pole;
-
-//   new_pole.rho = rho;
-//   new_pole.theta = theta;
-//   new_pole.polarity = pol;
-//   new_pole.ID = pole_count_;
-
-//   // Find the point in time of the first observation.
-//   double y = camera_resolution_width_;
-//   double first_observation = (1 / cos(theta)) * (rho - y * sin(theta));
-//   const double kWindowSizeInSec = kHough2MsgPerWindow / FLAGS_event_array_frequency;
-
-//   // Convert window time-steps to continous time.
-//   first_observation *= kWindowSizeInSec / (kHough2MsgPerWindow * kHough2TimestepsPerMsg);
-//   first_observation += window_time;
-
-//   new_pole.first_observed = first_observation;
-
-//   // The observation timestamp of the pole is still within the timespan
-//   // covered by the odometry buffer.
-//   if (first_observation > pose_buffer_.front()->header.stamp.toSec()) {
-//     // Query raw gps position at observation beginning time.
-
-//     // In the next step we want to inspect the pole at each observation
-//     // timepoint, so each time it moved from one pixel to the next. This means
-//     // that we turn the continous spatio-temporal line of the pole observation
-//     // back into individual x-t points, by sampling the line at every possible x
-//     // (every horizontal pixel).
-
-//     std::vector<Eigen::Vector2d> pixel_pos;
-//     std::vector<Eigen::Matrix<double, 2, 3>> projection_mats;
-//     std::vector<Eigen::Affine2d> transformation_mats;
-
-//     // Observation at each horizontal pixel position.
-//     for (int i = camera_resolution_width_; i > 0; i--) {
-//       // Timestamp of this observation.
-//       double observation_timestamp = (1 / cos(theta)) * (rho - i * sin(theta));
-//       observation_timestamp *= kWindowSizeInSec / (kHough2MsgPerWindow * kHough2TimestepsPerMsg);
-//       observation_timestamp += window_time;
-
-//       CHECK_GE(observation_timestamp, first_observation)
-//           << ":Something is wrong with observation odometry integration!";
-
-//       // Integrate odometry to get respective train transformations.
-//       if (observation_timestamp <= pose_buffer_.back()->header.stamp.toSec()) {
-//         // Get the latest odometry.
-
-//         auto cur_pose = queryPoseAtTime(observation_timestamp);
-
-//         // Assemble train transformation matrix.
-//         Eigen::Affine3d T_body_to_world;
-//         tf2::fromMsg(cur_pose.pose.pose, T_body_to_world);
-
-//         Eigen::Affine3d T_cam_to_world = T_body_to_world * T_cam_to_body_;
-
-//         // Invert train transformation matrix to get world to camera
-//         Eigen::Affine3d T_world_to_cam = T_cam_to_world.inverse();
-
-//         // Reduce 3D tf to 2D tf
-//         Eigen::Affine2d T_world_to_cam_reduced;
-//         T_world_to_cam_reduced = Eigen::Matrix3d::Identity();
-
-//         // NOTE: In camera frame, yaw is about Y axis..
-//         // ==> We ideally delete [Row 1] and [Col 2]. (index 0)
-//         // Hacky atan2 of averages in case of skew matrices
-//         auto yaw_mat_ = T_world_to_cam.matrix();
-//         double yaw_ = atan2(yaw_mat_(2, 0) - yaw_mat_(0, 1), yaw_mat_(0, 0) + yaw_mat_(2, 1));
-//         Eigen::Rotation2Dd R_world_to_cam_reduced(yaw_);
-
-//         T_world_to_cam_reduced.matrix().block<2, 2>(0, 0) = R_world_to_cam_reduced.matrix();
-//         T_world_to_cam_reduced(0, 2) = T_world_to_cam.translation()(0);
-//         T_world_to_cam_reduced(1, 2) = T_world_to_cam.translation()(2);
-
-//         // Everything needed for a DLT trianguaiton.
-//         Eigen::Vector2d pixel_position(i, 1);
-//         pixel_pos.push_back(pixel_position);
-//         transformation_mats.push_back(T_world_to_cam_reduced);
-//       }
-//     }
-
-//     // Use a Singular Value Decomposition (SVD) to perform the triangulation.
-//     // This is also known as a Direct Linear Transform (DLT).
-//     int num_rows = transformation_mats.size();
-
-//     // At least two observations are required for a triangulation.
-//     if (num_rows > 2) {
-//       // Assemble matrix A for DLT.
-//       Eigen::MatrixXd A;
-//       A.resize(num_rows, 3);
-//       for (int i = 0; i < num_rows; i++) {
-//         // Convert pixel frame to cam frame.
-//         double position = ((pixel_pos[i][0] - cam_config_.intrinsics[2]) /
-//         cam_config_.intrinsics[0]); A.row(i) = position * transformation_mats[i].matrix().row(1)
-//         -
-//                    transformation_mats[i].matrix().row(0);
-//       }
-//       // Singular Value decomposition.
-//       Eigen::BDCSVD<Eigen::MatrixXd> svd(A, Eigen::ComputeThinU | Eigen::ComputeThinV);
-
-//       // Get the last column.
-//       int n_ = svd.matrixV().cols() - 1;
-//       Eigen::Vector3d x = svd.matrixV().col(n_);
-//       double minSV = svd.singularValues()(n_);
-
-//       // ROS_INFO_STREAM("Min Val --> " << minSV);
-//       // ROS_INFO_STREAM("min p --> " << x);
-
-//       if (minSV < FLAGS_triangulation_threshold) {
-//         // Normalize homogenous coordinates.
-//         new_pole.pos_x = x[0] / x[2];
-//         new_pole.pos_y = x[1] / x[2];
-
-//         // Store new map point in file.
-//         if (!output_config_.map_file.empty() && map_file.is_open()) {
-//           map_file << std::fixed << new_pole.ID << ","
-//                    << "pole"
-//                    << "," << new_pole.first_observed << "," << new_pole.pos_x << ","
-//                    << new_pole.pos_y << ","
-//                    << "0"
-//                    << ","
-//                    << "0" << std::endl;
-//         }
-
-//         // && (new_pole.ID - 1) % 1 == 0
-//         if (FLAGS_show_markers) {
-//           const ros::Time ts_ = ros::Time();
-
-//           // Poles
-//           pole_marker_.header.stamp = ts_;
-//           pole_marker_.id = new_pole.ID;
-//           pole_marker_.pose.position.x = new_pole.pos_x;
-//           pole_marker_.pose.position.y = new_pole.pos_y;
-//           pole_marker_.color.a =
-//               0.2 + 0.8 * (FLAGS_triangulation_threshold - minSV) /
-//               FLAGS_triangulation_threshold;
-//           pole_viz_pub_.publish(pole_marker_);
-
-//           // Calculate cam position
-//           Eigen::Affine2d w_T_c = transformation_mats.front().inverse();
-
-//           Eigen::Vector2d w_t_c = w_T_c.translation();
-
-//           // Cam marker
-//           cam_marker_.header.stamp = ts_;
-//           cam_marker_.id = new_pole.ID;
-//           cam_marker_.color.b = 1;
-//           cam_marker_.color.g = 0;
-//           cam_marker_.pose.position.x = w_t_c(0);
-//           cam_marker_.pose.position.y = w_t_c(1);
-//           cam_viz_pub_.publish(cam_marker_);
-//         }
-
-//         // Increment TrackerPole Counter
-//         pole_count_ += 1;
-//       }
-//     }
-//   }
-// }
 
 // Just a funciton for creating new line structs.
 HoughLine Detector::addMaxima(int angle, int rad, double cur_time) {

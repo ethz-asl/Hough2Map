@@ -53,54 +53,22 @@ class Detector {
   // Specifying number of threads.
   static const int kNumThreads = 4;
 
-  // File Output.
-  const bool file_output_parameter_logging = true;
-
   // std::ofstream lines_file;
   std::ofstream map_file_;
 
   // Timing debugging.
   ProfilingInfo profiling_;
 
+  // Configs
   Hough1Config hough1_config_;
   DetectorConfig detector_config_;
   CameraConfig cam_config_;
   OutputConfig output_config_;
 
-  // General Parameters for 1st Hough Transform.
-  // int kHough1RadiusResolution = 660;  // Hough1
-  // int kHough1AngularResolution = 21;
-  // static const int kHough1MinAngle = -10;
-  // static const int kHough1MaxAngle = 10;
-
   // Precomputing possible angles and their sin/cos values in order to vectorize
   // the HT.
   Eigen::VectorXf thetas_1_;
   Eigen::MatrixXf polar_param_mapping_1_;
-
-  // General parameters for 2nd Hough transform.
-  // static const int kHough2AngularResolution = 65;
-  // static const int kHough2MinAngle = 1;
-  // static const int kHough2MaxAngle = 65;
-  // Eigen::VectorXd thetas_2_;
-  // Eigen::MatrixXd polar_param_mapping_2_;
-
-  // static const int kHough2TimestepsPerMsg = 3;
-  // static const int kHough2MsgPerWindow = 100;
-
-  // int kEventArrayFrequency = 30;
-  // int kCameraResolutionWidth;
-  // int kCameraResolutionHeight;
-
-  // static const int kTrackerCentroidWindowSize = 7;
-  // static const int kTrackerCentroidThreshold = 5;
-
-  // const float kAcceptableDistortionRange = 40.0;
-  // float intrinsics_[4];
-  // float distortion_coeffs_[4];
-  // Eigen::Affine3d T_cam_to_body_;
-  // Eigen::MatrixXf undist_map_x_;
-  // Eigen::MatrixXf undist_map_y_;
 
   // Viz Helpers
 
@@ -154,9 +122,6 @@ class Detector {
                            Eigen::EigenBase<DerivedMat> &sin_cos_map, const int kMinAngle,
                            const int kMaxAngle, const int kNumSteps);
   bool isLocalMaxima(const Eigen::MatrixXi &hough_space, int i, int radius);
-  // void newPoleDetection(double rho, double theta, double window_time, bool pol);
-  // void hough2nms(const int i, const int j, const Eigen::MatrixXi &hough_2_space,
-  //                std::vector<cv::Vec3f> &detections);
   void computeFullHoughTransform(const int time_step, const int nms_recompute_window,
                                  Eigen::MatrixXi &total_hough_space_neg,
                                  const Eigen::MatrixXi &radii);
@@ -182,8 +147,6 @@ class Detector {
                             std::vector<hough2map::HoughLine> &new_maxima,
                             std::vector<int> &new_maxima_value);
   void eventPreProcessing(const dvs_msgs::EventArray::ConstPtr &orig_msg, Eigen::MatrixXf &points);
-  // void secondHoughTransform(const std::vector<std::vector<hough2map::HoughLine>>
-  // &cur_maxima_list);
 
   // Tracker
   void heuristicTrack(const std::vector<std::vector<hough2map::HoughLine>> &cur_maxima_list);
@@ -192,9 +155,7 @@ class Detector {
 
   // Initialisation functions.
   void computeUndistortionMapping();
-  // void loadCalibration();
 
-  void deriveConfigs();
   void loadConfigFromParams();
   void loadCamConfigFromParams();
 
