@@ -90,11 +90,14 @@ void TrackerManager::track(double t, std::vector<int> centroid_list) {
 
     // Populate Slope vectors
     for (int i = centroid_buffer_.size() - 1; i >= 0; i--) {
+      int dx = p.x - centroid_buffer_[i].x;
       double dt = p.t - centroid_buffer_[i].t;
-      double dxdt = (p.x - centroid_buffer_[i].x) / dt;
+      double dxdt = double(dx) / dt;
 
-      // Skip this point if slope is less
-      if (std::abs(dxdt) < config_.min_dx_dt || std::abs(dxdt) > config_.max_dx_dt) continue;
+      // Skip this point if certain conditions are met:
+      if (std::abs(dxdt) < config_.min_dx_dt) continue;
+      if (std::abs(dxdt) > config_.max_dx_dt) continue;
+      if (std::abs(dx) > config_.max_dx_allowed) continue;
 
       // Else try to see if dx/dt fits in any cluster
       bool added = false;

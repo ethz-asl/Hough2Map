@@ -51,8 +51,9 @@ struct TrackerManagerConfig {
   int tracker_spawn_threshold = 20;  // Min number of observations required to spawn tracker
   int centroid_buffer_size = 150;    // Size of centroids in the buffer
   int dx_cluster_tol = 3;            // Tolerance in px for passing
-  double min_dx_dt = 40;             // Minimum dx/dt needed for fitting line
+  double min_dx_dt = 50;             // Minimum dx/dt needed for fitting line
   double max_dx_dt = 5000;           // Maximum dx/dt needed for fitting line
+  double max_dx_allowed = 100;       // Maximum dx allowed to be added into slope vec
   double maturity_age = 1.0;         // Time (in s) after which trackers are discarded
   TrackerConfig tracker_config;
 };

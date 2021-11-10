@@ -8,11 +8,11 @@ detector:
   triangulation_sv_thresh: 0.01
 
 hough1:
+  window_size: 200
+  threshold: 20
+  nms_radius: 10
   radial_resolution: 260
   angular_resolution: 21
-  window_size: 300
-  threshold: 15
-  nms_radius: 10
   angle_range:
     min: -10
     max: 10
@@ -27,7 +27,7 @@ tracker_mgr:
   dxdt_cluster_tol_px: 3
   max_dx_allowed: 100
   dxdt_range:
-    min: 40.0
+    min: 50.0
     max: 5000.0
   maturity_age: 1.0
 

@@ -222,6 +222,7 @@ void Detector::loadConfigFromParams() {
   ld = ld && nh->getParam("tracker_mgr/centr_buffer_l", tracker_mgr_config_.centroid_buffer_size);
   ld = ld && nh->getParam("tracker_mgr/spawn_thresh", tracker_mgr_config_.tracker_spawn_threshold);
   ld = ld && nh->getParam("tracker_mgr/dxdt_cluster_tol_px", tracker_mgr_config_.dx_cluster_tol);
+  ld = ld && nh->getParam("tracker_mgr/max_dx_allowed", tracker_mgr_config_.max_dx_allowed);
   ld = ld && nh->getParam("tracker_mgr/maturity_age", tracker_mgr_config_.maturity_age);
   ld = ld && nh->getParam("tracker_mgr/dxdt_range/min", tracker_mgr_config_.min_dx_dt);
   ld = ld && nh->getParam("tracker_mgr/dxdt_range/max", tracker_mgr_config_.max_dx_dt);
