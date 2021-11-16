@@ -828,15 +828,19 @@ void Detector::heuristicTrack(
   const double kColumnLengthInSec =
       (1.0 / cam_config_.evt_arr_frequency) / (detector_config_.tsteps_per_msg);
 
+  // double tracker_last_t = tracker_mgr_.getLatestTime();
+  // std::vector<PointTX> new_points;
+
   for (int i = 0; i < num_events; i++) {
     const dvs_msgs::Event &e = feature_msg_.events[i];
     for (auto &maxima : cur_maxima_list[i]) {
       // Not every message is exactly 33ms long. To deal with this, we currently
       // squeeze longer messages down to be 33ms long.
 
-      const int time_idx =
-          std::min((int)std::floor((e.ts.toSec() - kTimestampMsgBegin) / kColumnLengthInSec),
-                   detector_config_.tsteps_per_msg - 1);
+      const double t = e.ts.toSec();
+
+      const int time_idx = std::min((int)std::floor((t - kTimestampMsgBegin) / kColumnLengthInSec),
+                                    detector_config_.tsteps_per_msg - 1);
 
       CHECK_LT(time_idx, detector_config_.tsteps_per_msg)
           << ": Something wrong with the time index!" + time_idx;
@@ -845,6 +849,11 @@ void Detector::heuristicTrack(
       // accumulate them.
 
       tracked_maxima_neg(maxima.r, time_idx)++;
+
+      // if (t > tracker_last_t && maxima.r < cam_config_.cam_res_width) {
+      //   PointTX p = {t, maxima.r};
+      //   new_points.push_back(p);
+      // }
     }
   }
 

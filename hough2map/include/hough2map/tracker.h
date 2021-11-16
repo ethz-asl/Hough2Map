@@ -52,12 +52,15 @@ class TrackerManager {
 
   // Essential functions
   void track(double t, std::vector<int> centroid_list);
+  void track(std::vector<PointTX> maxima_list);
   std::vector<Tracker> getFinishedTrackers(double t);
+  double getLatestTime();
 
  private:
+  double last_t_ = 0;                    // Last active time for tracker manager
   TrackerManagerConfig config_;          // Tracker Config Options
   std::deque<PointTX> centroid_buffer_;  // Buffer to store centroids
-  std::vector<Tracker> trackers_;
+  std::vector<Tracker> trackers_;        // Vector of trackers
 };
 
 }  // namespace hough2map

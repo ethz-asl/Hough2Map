@@ -152,6 +152,87 @@ void TrackerManager::track(double t, std::vector<int> centroid_list) {
   }
 }
 
+void TrackerManager::track(std::vector<PointTX> maxima_list) {
+  // Set last time
+  last_t_ = maxima_list.back().t;
+
+  // For each new centroid, check if a new tracker can be spawned
+  for (auto &&p : maxima_list) {
+    // For each tracker, check if the current point can be added
+    bool added = false;
+    for (auto &&tracker : trackers_) {
+      added = added || tracker.checkAndAdd(p);
+    }
+
+    if (added) continue;
+
+    // Check if a line can be found from this current point
+    std::vector<std::pair<double, std::vector<int>>> slope_vecs;
+
+    // Populate Slope vectors
+    for (int i = centroid_buffer_.size() - 1; i >= 0; i--) {
+      int dx = p.x - centroid_buffer_[i].x;
+      double dt = p.t - centroid_buffer_[i].t;
+      double dxdt = double(dx) / dt;
+
+      // Skip this point if certain conditions are met:
+      if (std::abs(dxdt) < config_.min_dx_dt) continue;
+      if (std::abs(dxdt) > config_.max_dx_dt) continue;
+      if (std::abs(dx) > config_.max_dx_allowed) continue;
+
+      // Else try to see if dx/dt fits in any cluster
+      bool added = false;
+      for (auto &&sv : slope_vecs) {
+        if ((int)(std::abs(dxdt - sv.first) * dt) > config_.dx_cluster_tol) continue;
+
+        // Update avg theta and append to buffer index vector
+        int n = sv.second.size();
+        sv.first = (n * sv.first + dxdt) / (n + 1);
+        sv.second.push_back(i);
+
+        // Misc flags
+        added = true;
+        break;
+      }
+
+      if (added) continue;
+
+      std::pair<double, std::vector<int>> new_vec;
+      std::vector<int> p_list{i};
+      new_vec.first = dxdt;
+      new_vec.second = p_list;
+      slope_vecs.push_back(new_vec);
+    }
+
+    // For each slope vecs, check if size > kTrackerSpawnThreshold
+    bool spawned = false;
+    for (auto &&sv : slope_vecs) {
+      if (sv.second.size() >= config_.tracker_spawn_threshold) {
+        // Create vector of points and remove from buffer
+        std::vector<PointTX> pts;
+        for (auto &&idx : sv.second) {
+          pts.push_back(centroid_buffer_[idx]);
+          centroid_buffer_.erase(std::next(centroid_buffer_.begin(), idx));
+        }
+
+        Tracker t(config_.tracker_config, pts);
+        trackers_.push_back(t);
+        // Flags
+        spawned = true;
+      }
+    }
+
+    // If yes, spawn a new tracker and remove these points from buffer
+    if (spawned) continue;
+
+    // If not, add these points to buffer and resize buffer
+    centroid_buffer_.push_back(p);
+    while (centroid_buffer_.size() > config_.centroid_buffer_size) {
+      centroid_buffer_.pop_front();
+    }
+  }
+}
+
 std::vector<Tracker> TrackerManager::getFinishedTrackers(double t) {
   // See if any trackers are mature enough and haven't been updated
   std::vector<Tracker> return_trackers;
@@ -164,5 +245,7 @@ std::vector<Tracker> TrackerManager::getFinishedTrackers(double t) {
 
   return return_trackers;
 }
+
+double TrackerManager::getLatestTime() { return last_t_; }
 
 }  // namespace hough2map
