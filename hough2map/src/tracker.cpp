@@ -154,7 +154,7 @@ void TrackerManager::track(double t, std::vector<int> centroid_list) {
 
 void TrackerManager::track(std::vector<PointTX> maxima_list) {
   // Set last time
-  last_t_ = maxima_list.back().t;
+  last_t_ = maxima_list.size() > 0 ? maxima_list.back().t : 0.0;
 
   // For each new centroid, check if a new tracker can be spawned
   for (auto &&p : maxima_list) {

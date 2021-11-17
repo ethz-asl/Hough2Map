@@ -206,8 +206,8 @@ void Detector::loadConfigFromParams() {
   ld = ld && nh->getParam("hough1/window_size", hough1_config_.window_size);
   ld = ld && nh->getParam("hough1/threshold", hough1_config_.threshold);
   ld = ld && nh->getParam("hough1/nms_radius", hough1_config_.nms_radius);
-  ld = ld && nh->getParam("hough1/angle_range/min", hough1_config_.min_angle);
-  ld = ld && nh->getParam("hough1/angle_range/max", hough1_config_.max_angle);
+  ld = ld && nh->getParam("hough1/angle_range/min", hough1_config_.angle_min);
+  ld = ld && nh->getParam("hough1/angle_range/max", hough1_config_.angle_max);
 
   // Detector Config
   ld = ld && nh->getParam("detector/evt_subsample_fac", detector_config_.evt_subsample_fac);
@@ -217,6 +217,10 @@ void Detector::loadConfigFromParams() {
   ld = ld && nh->getParam("detector/centroid_find_window", detector_config_.centroid_find_window);
   ld = ld && nh->getParam("detector/centroid_find_thresh", detector_config_.centroid_find_thresh);
   ld = ld && nh->getParam("detector/triangulation_sv_thresh", detector_config_.triangln_sv_thresh);
+  ld = ld && nh->getParam("detector/min_baseline_dist", detector_config_.min_baseline_dist);
+  ld = ld && nh->getParam("detector/max_reproj_err_px", detector_config_.max_reproj_err_px);
+  ld = ld && nh->getParam("detector/dist_thresh/min", detector_config_.dist_thresh_min);
+  ld = ld && nh->getParam("detector/dist_thresh/max", detector_config_.dist_thresh_max);
 
   // Tracker Manager Config
   ld = ld && nh->getParam("tracker_mgr/centr_buffer_l", tracker_mgr_config_.centroid_buffer_size);
