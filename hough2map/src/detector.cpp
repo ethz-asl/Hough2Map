@@ -873,7 +873,7 @@ void Detector::heuristicTrack(
     }
   }
 
-  tracker_mgr_.track(new_points);
+  // tracker_mgr_.track(new_points);
 
   const double kWindowSizeInSec = detector_config_.msg_per_window / cam_config_.evt_arr_frequency;
   const double kWindowEndTime = feature_msg_.events[num_events - 1].ts.toSec();
@@ -898,7 +898,7 @@ void Detector::heuristicTrack(
     cluster_centroids_.push_back(centroids);
 
     // Track centroids
-    // tracker_mgr_.track(t, centroids);
+    tracker_mgr_.track(t, centroids);
   }
 
   // Crop the cluster centroids deque
@@ -990,7 +990,7 @@ void Detector::triangulateTracker(Tracker tracker) {
     // Get the last column.
     int n_ = svd.matrixV().cols() - 1;
     Eigen::Vector3d x = svd.matrixV().col(n_);
-    double minSV = svd.singularValues()(n_);
+    // double minSV = svd.singularValues()(n_);
 
     // Filters meta variables
     bool acceptable = true;
@@ -1049,8 +1049,6 @@ void Detector::triangulateTracker(Tracker tracker) {
         pole_marker_.id = new_pole.ID;
         pole_marker_.pose.position.x = new_pole.pos_x;
         pole_marker_.pose.position.y = new_pole.pos_y;
-        pole_marker_.color.a = 0.2 + 0.8 * (detector_config_.triangln_sv_thresh - minSV) /
-                                         detector_config_.triangln_sv_thresh;
         pole_viz_pub_.publish(pole_marker_);
 
         // Calculate cam position
