@@ -111,8 +111,8 @@ Detector::Detector(const ros::NodeHandle &nh, const ros::NodeHandle &nh_private,
 
   // Initializig theta, sin and cos values for first and second Hough
   // transform.
-  initializeSinCosMap(thetas_1_, polar_param_mapping_1_, hough1_config_.min_angle,
-                      hough1_config_.max_angle, hough1_config_.angular_resolution);
+  initializeSinCosMap(thetas_1_, polar_param_mapping_1_, hough1_config_.angle_min,
+                      hough1_config_.angle_max, hough1_config_.angular_resolution);
   // initializeSinCosMap(thetas_2_, polar_param_mapping_2_, kHough2MinAngle, kHough2MaxAngle,
   //                     kHough2AngularResolution);
 }
@@ -822,9 +822,9 @@ void Detector::heuristicTrack(
   // Step 1: Reshape maxima list into x-t data.
   // Step 2: Discretizing maxima into timesteps.
 
-  Eigen::MatrixXi tracked_maxima_neg;
-  tracked_maxima_neg.resize(hough1_config_.radial_resolution, detector_config_.tsteps_per_msg);
-  tracked_maxima_neg.setZero();
+  Eigen::MatrixXi tracked_maxima;
+  tracked_maxima.resize(hough1_config_.radial_resolution, detector_config_.tsteps_per_msg);
+  tracked_maxima.setZero();
 
   const double kTimestampMsgBegin = feature_msg_.events[0].ts.toSec();
 
@@ -832,8 +832,9 @@ void Detector::heuristicTrack(
   const double kColumnLengthInSec =
       (1.0 / cam_config_.evt_arr_frequency) / (detector_config_.tsteps_per_msg);
 
-  // double tracker_last_t = tracker_mgr_.getLatestTime();
-  // std::vector<PointTX> new_points;
+  double tracker_last_t = tracker_mgr_.getLatestTime();
+  std::vector<int> prev_maxima_px_list;
+  std::vector<PointTX> new_points;
 
   for (int i = 0; i < num_events; i++) {
     const dvs_msgs::Event &e = feature_msg_.events[i];
@@ -851,21 +852,34 @@ void Detector::heuristicTrack(
 
       // This discretizes the maxima. Many will be same or super close, so we
       // accumulate them.
+      tracked_maxima(maxima.r, time_idx)++;
 
-      tracked_maxima_neg(maxima.r, time_idx)++;
+      // Add new point to list only if:
+      // - The line is found after last buffer time
+      // - The line is not beyond camera width
+      // - The maxima already doesn't exist in prev list
+      if (t > tracker_last_t && maxima.r < cam_config_.cam_res_width &&
+          std::find(prev_maxima_px_list.begin(), prev_maxima_px_list.end(), maxima.r) ==
+              prev_maxima_px_list.end()) {
+        PointTX p = {t, maxima.r};
+        new_points.push_back(p);
+      }
+    }
 
-      // if (t > tracker_last_t && maxima.r < cam_config_.cam_res_width) {
-      //   PointTX p = {t, maxima.r};
-      //   new_points.push_back(p);
-      // }
+    // Update prev maxima list
+    prev_maxima_px_list.resize(cur_maxima_list[i].size());
+    for (size_t j = 0; j < cur_maxima_list[i].size(); j++) {
+      prev_maxima_px_list[j] = cur_maxima_list[i][j].r;
     }
   }
+
+  tracker_mgr_.track(new_points);
 
   const double kWindowSizeInSec = detector_config_.msg_per_window / cam_config_.evt_arr_frequency;
   const double kWindowEndTime = feature_msg_.events[num_events - 1].ts.toSec();
 
   // Window for data storage.
-  houghout_queue_.push_back(tracked_maxima_neg);
+  houghout_queue_.push_back(tracked_maxima);
   houghout_queue_last_t =
       kTimestampMsgBegin + kColumnLengthInSec * (detector_config_.tsteps_per_msg - 1);
 
@@ -875,16 +889,16 @@ void Detector::heuristicTrack(
   }
 
   // Get centroids
-  for (int i = 0; i < tracked_maxima_neg.cols(); i++) {
+  for (int i = 0; i < tracked_maxima.cols(); i++) {
     // Generate timestamp
     double t = kTimestampMsgBegin + i * kColumnLengthInSec;
 
     // Get list of centroids
-    std::vector<int> centroids = getClusteringCentroids(tracked_maxima_neg.col(i));
+    std::vector<int> centroids = getClusteringCentroids(tracked_maxima.col(i));
     cluster_centroids_.push_back(centroids);
 
     // Track centroids
-    tracker_mgr_.track(t, centroids);
+    // tracker_mgr_.track(t, centroids);
   }
 
   // Crop the cluster centroids deque
@@ -978,7 +992,39 @@ void Detector::triangulateTracker(Tracker tracker) {
     Eigen::Vector3d x = svd.matrixV().col(n_);
     double minSV = svd.singularValues()(n_);
 
-    if (minSV < detector_config_.triangln_sv_thresh) {
+    // Filters meta variables
+    bool acceptable = true;
+    Eigen::Vector2d x_world(x(0) / x(2), x(1) / x(2));
+
+    // Check for baseline
+    double baseline_dist =
+        (transformation_mats.front().translation() - transformation_mats.back().translation())
+            .norm();
+    acceptable = (baseline_dist > detector_config_.min_baseline_dist);
+
+    for (int i = 0; i < num_rows; i++) {
+      if (!acceptable) continue;
+
+      // Init vars
+      Eigen::Affine2d tf_mat = transformation_mats[i];
+      double x_px = pixel_pos[i][0];
+
+      // Compute x_cam
+      Eigen::Vector2d x_cam = tf_mat * x_world;
+
+      // Check if distance range is satisfied
+      if (x_cam(1) >= detector_config_.dist_thresh_min &&
+          x_cam(1) <= detector_config_.dist_thresh_max) {
+        // If so, measure reprojection error
+        double x_px_reproj =
+            cam_config_.intrinsics[0] * (x_cam(0) / x_cam(1)) + cam_config_.intrinsics[2];
+        acceptable = (std::abs(x_px_reproj - x_px) < detector_config_.max_reproj_err_px);
+      } else {
+        acceptable = false;
+      }
+    }
+
+    if (acceptable) {
       // Normalize homogenous coordinates.
       new_pole.pos_x = x[0] / x[2];
       new_pole.pos_y = x[1] / x[2];

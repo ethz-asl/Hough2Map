@@ -52,11 +52,16 @@ void Tracker::updateLastNLineCoeffs() {
 }
 
 bool Tracker::checkAndAdd(PointTX p) {
+  double norm =
+      std::abs(p.x - tracked_points_.back().x) + 5000 * std::abs(p.t - tracked_points_.back().t);
+
   // Check if new point p falls in the linearity of previous 7 points
   int x_hat = (int)(line_coeffs_.first + line_coeffs_.second * p.t);
   if (std::abs(p.x - x_hat) <= config_.linearity_tol_px) {
-    tracked_points_.push_back(p);
-    updateLastNLineCoeffs();
+    if (norm > 5) {
+      tracked_points_.push_back(p);
+      updateLastNLineCoeffs();
+    }
     return true;
   }
   return false;
