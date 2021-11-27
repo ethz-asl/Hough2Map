@@ -70,6 +70,9 @@ class Detector {
   Eigen::VectorXf thetas_1_;
   Eigen::MatrixXf polar_param_mapping_1_;
 
+  // Only updated maximas that must be cleared whenever read
+  std::vector<HoughLine> maxima_updates_;
+
   // Viz Helpers
 
   image_transport::ImageTransport img_pipe_;

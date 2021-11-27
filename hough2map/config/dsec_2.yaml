@@ -1,11 +1,11 @@
 detector:
   evt_subsample_fac: 1
   buffer_size_s: 30.0
-  tsteps_per_msg: 8
-  msg_per_window: 60
-  centroid_find_window: 7
-  centroid_find_thresh: 5
-  triangulation_sv_thresh: 0.01
+  tsteps_per_msg: 3
+  msg_per_window: 100
+  centroid_find_window: 9
+  centroid_find_thresh: 7
+  triangulation_sv_thresh: 0.005
   min_baseline_dist: 1.0
   max_reproj_err_px: 6
   dist_thresh:
@@ -14,9 +14,9 @@ detector:
 
 hough1:
   window_size: 200
-  threshold: 20
+  threshold: 12
   nms_radius: 10
-  radial_resolution: 260
+  radial_resolution: 350
   angular_resolution: 21
   angle_range:
     min: -10
@@ -28,13 +28,13 @@ tracker:
 
 tracker_mgr:
   centr_buffer_l: 150
-  spawn_thresh: 40
-  dxdt_cluster_tol_px: 3
+  spawn_thresh: 12
+  dxdt_cluster_tol_px: 5
   max_dx_allowed: 100
   dxdt_range:
     min: 50.0
-    max: 5000.0
-  maturity_age: 1.0
+    max: 8000.0
+  maturity_age: 0.7
 
 output:
   map_file: ""

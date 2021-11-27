@@ -605,6 +605,16 @@ void Detector::itterativeNMS(const int time_step, const int nms_recompute_window
           break;
         }
       }
+
+      for (int i = 0; i < previous_maxima.size(); i++) {
+        const hough2map::HoughLine &kPreviousMaximum = previous_maxima[i];
+        for (const hough2map::HoughLine &current_maximum : current_maxima) {
+          if (!((current_maximum.r == kPreviousMaximum.r) &&
+                (current_maximum.theta_idx == kPreviousMaximum.theta_idx))) {
+            maxima_updates_.push_back(current_maximum);
+          }
+        }
+      }
     }
   }
 }
@@ -836,6 +846,19 @@ void Detector::heuristicTrack(
   std::vector<int> prev_maxima_px_list;
   std::vector<PointTX> new_points;
 
+  for (auto &&max_up : maxima_updates_) {
+    PointTX p = {max_up.time, max_up.r};
+    if (max_up.time > tracker_last_t && max_up.r < cam_config_.cam_res_width) {
+      PointTX p = {max_up.time, max_up.r};
+      new_points.push_back(p);
+      if (!output_config_.map_file.empty() && map_file_.is_open()) {
+        map_file_ << std::fixed << p.t << ',' << p.x << std::endl;
+      }
+    }
+  }
+
+  maxima_updates_.clear();
+
   for (int i = 0; i < num_events; i++) {
     const dvs_msgs::Event &e = feature_msg_.events[i];
     for (auto &maxima : cur_maxima_list[i]) {
@@ -858,12 +881,15 @@ void Detector::heuristicTrack(
       // - The line is found after last buffer time
       // - The line is not beyond camera width
       // - The maxima already doesn't exist in prev list
-      if (t > tracker_last_t && maxima.r < cam_config_.cam_res_width &&
-          std::find(prev_maxima_px_list.begin(), prev_maxima_px_list.end(), maxima.r) ==
-              prev_maxima_px_list.end()) {
-        PointTX p = {t, maxima.r};
-        new_points.push_back(p);
-      }
+
+      // &&
+      //     std::find(prev_maxima_px_list.begin(), prev_maxima_px_list.end(), maxima.r) ==
+      //         prev_maxima_px_list.end()
+
+      // if (t > tracker_last_t && maxima.r < cam_config_.cam_res_width) {
+      //   PointTX p = {t, maxima.r};
+      //   new_points.push_back(p);
+      // }
     }
 
     // Update prev maxima list
@@ -873,7 +899,7 @@ void Detector::heuristicTrack(
     }
   }
 
-  // tracker_mgr_.track(new_points);
+  tracker_mgr_.track(new_points);
 
   const double kWindowSizeInSec = detector_config_.msg_per_window / cam_config_.evt_arr_frequency;
   const double kWindowEndTime = feature_msg_.events[num_events - 1].ts.toSec();
@@ -898,7 +924,7 @@ void Detector::heuristicTrack(
     cluster_centroids_.push_back(centroids);
 
     // Track centroids
-    tracker_mgr_.track(t, centroids);
+    // tracker_mgr_.track(t, centroids);
   }
 
   // Crop the cluster centroids deque
@@ -934,7 +960,8 @@ void Detector::triangulateTracker(Tracker tracker) {
   std::vector<Eigen::Affine2d> transformation_mats;
 
   for (auto &&tracker_pt : tracker_points) {
-    if (tracker_pt.t <= pose_buffer_.back()->header.stamp.toSec()) {
+    if (tracker_pt.t >= pose_buffer_.front()->header.stamp.toSec() &&
+        tracker_pt.t <= pose_buffer_.back()->header.stamp.toSec()) {
       // Get the latest odometry.
 
       auto cur_pose = queryPoseAtTime(tracker_pt.t);
@@ -1030,15 +1057,15 @@ void Detector::triangulateTracker(Tracker tracker) {
       new_pole.pos_y = x[1] / x[2];
 
       // Store new map point in file.
-      if (!output_config_.map_file.empty() && map_file_.is_open()) {
-        map_file_ << std::fixed << new_pole.ID << ","
-                  << "pole"
-                  << "," << new_pole.first_observed << "," << new_pole.pos_x << ","
-                  << new_pole.pos_y << ","
-                  << "0"
-                  << ","
-                  << "0" << std::endl;
-      }
+      // if (!output_config_.map_file.empty() && map_file_.is_open()) {
+      //   map_file_ << std::fixed << new_pole.ID << ","
+      //             << "pole"
+      //             << "," << new_pole.first_observed << "," << new_pole.pos_x << ","
+      //             << new_pole.pos_y << ","
+      //             << "0"
+      //             << ","
+      //             << "0" << std::endl;
+      // }
 
       // && (new_pole.ID - 1) % 1 == 0
       if (output_config_.rviz) {

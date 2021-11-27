@@ -1,7 +1,7 @@
 <launch>
   <!-- rosbag playback -->
   <arg name="bag" />
-  <node pkg="rosbag" type="play" name="rosbag" args="$(arg bag) -q -d 3"/>
+  <node pkg="rosbag" type="play" name="rosbag" args="$(arg bag) -q -d 3 -s 30"/>
 
   <!-- mapping pipeline -->
   <arg name="camera" default="rail_240_180"/>
