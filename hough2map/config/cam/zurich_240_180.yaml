@@ -1,0 +1,14 @@
+cam:
+  camera_model: pinhole
+  distortion_coeffs: [-0.23727317686483818, 0.040561994043955864, -0.00097061459451937, -0.0005408356901682119]
+  distortion_model: radtan
+  distortion_acceptable: 70.0
+  distorted: true
+  intrinsics: [117.71717425253404, 117.72529145826063, 120.65603584178703, 84.34465593990322]
+  resolution: [240, 180]
+  events_frequency: 30
+  rostopic: /dvs/image_raw
+  cam_to_body: [-1.0,  0.0,  0.0, 0.0,
+                0.0,  0.0,  -1.0,  0.0,
+                0.0, -1.0,  0.0,  0.0,
+                0.0,  0.0,  0.0,  1.0]

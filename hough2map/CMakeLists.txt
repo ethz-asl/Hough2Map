@@ -15,6 +15,7 @@ cs_add_executable(${PROJECT_NAME}
 
 cs_add_library(${PROJECT_NAME}_lib
   src/detector.cpp
+  src/tracker.cpp
 )
 
 if(OpenMP_CXX_FOUND)

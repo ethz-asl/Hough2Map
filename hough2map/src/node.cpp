@@ -1,10 +1,9 @@
-#include "hough2map/detector.h"
-#include <maplab-ros-common/gflags-interface.h>
 #include <ros/ros.h>
+
+#include "hough2map/detector.h"
 
 int main(int argc, char *argv[]) {
   google::InitGoogleLogging(argv[0]);
-  google::ParseCommandLineFlags(&argc, &argv, true);
   google::InstallFailureSignalHandler();
   FLAGS_alsologtostderr = true;
   FLAGS_colorlogtostderr = true;
@@ -14,11 +13,8 @@ int main(int argc, char *argv[]) {
 
   image_transport::ImageTransport img_pipe(nh);
 
-  // Reading RosParams and storing as gflags.
-  ros_common::parseGflagsFromRosParams(argv[0], nh_private);
-
   // Create pole detector.
-  ROS_INFO("Using Hough detector.");
+  ROS_INFO("Using Hough Detector");
 
   hough2map::Detector detector(nh, nh_private, img_pipe);
 

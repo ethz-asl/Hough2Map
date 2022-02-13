@@ -1,27 +1,16 @@
 <launch>
   <!-- rosbag playback -->
   <arg name="bag" />
-  <node pkg="rosbag" type="play" name="rosbag" args="$(arg bag) -q -d 3 -s 0"/>
+  <node pkg="rosbag" type="play" name="rosbag" args="$(arg bag) -q -d 3 -s 350"/>
 
   <!-- mapping pipeline -->
-  <arg name="profile" default="rail"/>
+  <arg name="camera" default="rail_240_180"/>
+  <arg name="config" default="default"/>
   <arg name="map_out" default="/tmp/_map.txt"/>
-  <arg name="lines_out" default=""/>
-  <arg name="pole_markers" default="false"/>
-  <node name="hough2map" pkg="hough2map" type="hough2map" output="screen">
-    <param name="calibration_profile" value="$(arg profile)"/>
-    <param name="map_output" value="$(arg map_out)"/>
-    <param name="lines_output" value="$(arg lines_out)"/>
-    <param name="show_markers" value="$(arg pole_markers)"/>
-    <param name="hough_1_threshold" value="15"/>
-    <param name="hough_1_window_size" value="200"/>
-    <param name="buffer_size_s" value="30"/>
-    <param name="hough_2_min_threshold" value="7000"/>
-    <param name="display_2nd_hough_space" value="true"/>
-    <param name="show_lines_in_video" value="true"/>
-    <!-- <param name="odometry_event_alignment" value="-0.314897455547225"/> -->
-    <param name="odometry_event_alignment" value="0.0"/>
-    <param name="triangulation_threshold" value="0.1"/>
+  <node name="hough2map" pkg="hough2map" type="hough2map" output="log">
+    <rosparam command="load" file="$(find hough2map)/config/$(arg config).yaml" />
+    <rosparam command="load" file="$(find hough2map)/config/cam/$(arg camera).yaml" />
+    <param name="output/map_file" value="$(arg map_out)"/>
   </node>
 
   <!-- event visualization -->
