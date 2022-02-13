@@ -21,7 +21,13 @@ int Tracker::length() { return tracked_points_.size(); }
 
 double Tracker::lastActiveTime() { return tracked_points_.back().t; }
 
-std::vector<PointTX> Tracker::getPoints() { return tracked_points_; }
+std::vector<PointTX> Tracker::getPoints() {
+  // Filter out junk values
+  std::vector<PointTX> return_pts;
+  std::copy_if(tracked_points_.begin(), tracked_points_.end(), std::back_inserter(return_pts),
+               [](PointTX p) { return p.t > 1; });
+  return return_pts;
+}
 
 void Tracker::updateLastNLineCoeffs() {
   // Update linearity coeffs from given points
@@ -158,8 +164,10 @@ void TrackerManager::track(double t, std::vector<int> centroid_list) {
 }
 
 void TrackerManager::track(std::vector<PointTX> maxima_list) {
+  if (maxima_list.size() == 0) return;
+
   // Set last time
-  last_t_ = maxima_list.size() > 0 ? maxima_list.back().t : 0.0;
+  last_t_ = maxima_list.back().t;
 
   // For each new centroid, check if a new tracker can be spawned
   for (auto &&p : maxima_list) {
@@ -232,9 +240,10 @@ void TrackerManager::track(std::vector<PointTX> maxima_list) {
 
     // If not, add these points to buffer and resize buffer
     centroid_buffer_.push_back(p);
-    while (centroid_buffer_.size() > config_.centroid_buffer_size) {
-      centroid_buffer_.pop_front();
-    }
+  }
+
+  while (centroid_buffer_.size() > config_.centroid_buffer_size) {
+    centroid_buffer_.pop_front();
   }
 }
 
