@@ -10,8 +10,8 @@ namespace hough2map {
 struct Hough1Config {
   int radial_resolution = 660;  // Radial resolution (in px) for Hough Tr 1
   int angular_resolution = 21;  // Angular resolution for Hough Tr 1
-  int min_angle = -10;          // Min angle for Hough Tr 1
-  int max_angle = 10;           // Max angle for Hough Tr 1
+  int angle_min = -10;          // Min angle for Hough Tr 1
+  int angle_max = 10;           // Max angle for Hough Tr 1
   int threshold = 15;           // Num votes threshold
   int window_size = 300;        // Window size for events
   int nms_radius = 10;          // NMS suppression radius (in px)
@@ -25,6 +25,10 @@ struct DetectorConfig {
   int centroid_find_window = 7;      // Window (in px) to search centroid within along a maxima list
   int centroid_find_thresh = 5;      // Min num of maximas needed to find a centroid
   double triangln_sv_thresh = 0.05;  // Threshold of SV below which solution is accepted
+  double dist_thresh_min = 0;        // Minimum dist in m for pole detection
+  double dist_thresh_max = 15;       // Maximum dist in m for pole detection
+  double min_baseline_dist = 1.0;    // Minimum baseline dist in m between 1st and last obs
+  int max_reproj_err_px = 5;         // Max allowed reprojection error
 };
 
 struct CameraConfig {

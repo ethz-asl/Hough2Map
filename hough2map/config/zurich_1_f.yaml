@@ -6,16 +6,16 @@ detector:
   centroid_find_window: 9
   centroid_find_thresh: 7
   triangulation_sv_thresh: 0.005
-  min_baseline_dist: 1.0
-  max_reproj_err_px: 9
+  min_baseline_dist: 0.2
+  max_reproj_err_px: 30
   dist_thresh:
     min: 0.0
     max: 50.0
 
 hough1:
-  window_size: 400
-  threshold: 15
-  nms_radius: 10
+  window_size: 300
+  threshold: 20
+  nms_radius: 20
   radial_resolution: 670
   angular_resolution: 11
   angle_range:

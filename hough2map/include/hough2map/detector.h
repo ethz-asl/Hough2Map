@@ -70,6 +70,10 @@ class Detector {
   Eigen::VectorXf thetas_1_;
   Eigen::MatrixXf polar_param_mapping_1_;
 
+  // Only updated maximas that must be cleared whenever read
+  // std::vector<HoughLine> maxima_updates_;
+  std::vector<PointTX> maxima_updates_;
+
   // Viz Helpers
 
   image_transport::ImageTransport img_pipe_;
@@ -171,7 +175,7 @@ class Detector {
   void visualizeTracker();
 
   std::deque<Eigen::MatrixXi> houghout_queue_;
-  double houghout_queue_last_t;
+  double houghout_queue_last_t_;
 
   // Events from the previous dvs_msg need to be carried over to start of the
   // Hough computation of the next events. This basically ensures a continous

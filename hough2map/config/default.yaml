@@ -6,6 +6,11 @@ detector:
   centroid_find_window: 7
   centroid_find_thresh: 5
   triangulation_sv_thresh: 0.01
+  min_baseline_dist: 1.0
+  max_reproj_err_px: 5
+  dist_thresh:
+    min: 0.0
+    max: 15.0
 
 hough1:
   radial_resolution: 260
