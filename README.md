@@ -1,7 +1,7 @@
 # Hough²Map
 Iterative Event-based Hough Transform for High-Speed Railway Mapping
 
-
+Ubuntu 20.04+ROS noetic [![Build Status](https://jenkins.asl.ethz.ch/buildStatus/icon?job=Hough2Map)](https://jenkins.asl.ethz.ch/job/Hough2Map/)
 
 ## Abstract
 
