@@ -97,22 +97,12 @@ private:
 
   // Precomputing possible angles and their sin/cos values in order to vectorize
   // the HT.
-  Eigen::VectorXf thetas_1_;
-  Eigen::MatrixXf polar_param_mapping_1_;
+  Eigen::VectorXf thetas_;
+  Eigen::MatrixXf polar_param_mapping_;
 
   // Hough transform objects.
   typedef Eigen::Matrix<int, kHough1RadiusResolution, kHough1AngularResolution>
       MatrixHough;
-
-  // General parameters for 2nd Hough transform.
-  static const int kHough2AngularResolution = 65;
-  static const int kHough2MinAngle = 1;
-  static const int kHough2MaxAngle = 65;
-  Eigen::VectorXd thetas_2_;
-  Eigen::MatrixXd polar_param_mapping_2_;
-
-  static const int kHough2TimestepsPerMsg = 3;
-  static const int kHough2MsgPerWindow = 100;
 
   int camera_resolution_width_;
   int camera_resolution_height_;
@@ -124,8 +114,6 @@ private:
   Eigen::MatrixXf undist_map_y_;
 
   // ROS interface.
-  // ros::NodeHandle nh_;
-
   ros::NodeHandle nh_;
   ros::NodeHandle nh_private_;
   ros::Publisher feature_pub_;
@@ -164,8 +152,7 @@ private:
                            const int kNumSteps);
   bool isLocalMaxima(const Eigen::MatrixXi &hough_space, int i, int radius);
   void newPoleDetection(double rho, double theta, double window_time, bool pol);
-  void hough2nms(const int i, const int j, const Eigen::MatrixXi &hough_2_space,
-                 std::vector<cv::Vec3f> &detections);
+
   void computeFullHoughTransform(const int time_step,
                                  const int nms_recompute_window,
                                  MatrixHough &total_hough_space_pos,
@@ -199,9 +186,7 @@ private:
       std::vector<int> &discard,
       std::vector<hough2map::Detector::line> &new_maxima,
       std::vector<int> &new_maxima_value);
-  void
-  secondHoughTransform(const std::vector<std::vector<hough2map::Detector::line>>
-                           &cur_maxima_list);
+  
   void eventPreProcessing(const dvs_msgs::EventArray::ConstPtr &orig_msg,
                           Eigen::MatrixXf &points);
 
@@ -221,18 +206,9 @@ private:
   void drawPolarCorLine(cv::Mat &image_space, float rho, float theta,
                         cv::Scalar color);
   void imageCallback(const sensor_msgs::Image::ConstPtr &msg);
-  void visualizeSecondHoughSpace(const std::vector<cv::Vec3f> &kDetectionsPos,
-                                 const std::vector<cv::Vec3f> &kDetectionsNeg);
   void visualizeCurrentLineDetections(
       const std::vector<std::vector<hough2map::Detector::line>>
           &cur_maxima_list);
-
-  std::deque<
-      Eigen::Matrix<int, kHough1RadiusResolution, kHough2TimestepsPerMsg>>
-      hough2_queue_pos_;
-  std::deque<
-      Eigen::Matrix<int, kHough1RadiusResolution, kHough2TimestepsPerMsg>>
-      hough2_queue_neg_;
 
   // Events from the previous dvs_msg need to be carried over to start of the
   // Hough computation of the next events. This basically ensures a continous
