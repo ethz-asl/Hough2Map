@@ -19,6 +19,3 @@
 [submodule "dependencies/catkin_simple"]
 	path = dependencies/catkin_simple
 	url = https://github.com/catkin/catkin_simple.git
-[submodule "dependencies/vision_opencv"]
-	path = dependencies/vision_opencv
-	url = https://github.com/ros-perception/vision_opencv.git
