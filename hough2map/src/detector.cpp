@@ -77,7 +77,7 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   // Plot current hough detections in the video.
   if (FLAGS_show_lines_in_video) {
     cv::namedWindow("Detected poles", CV_WINDOW_NORMAL);
-    cv::namedWindow("Hough Space", CV_WINDOW_NORMAL);
+    cv::namedWindow("Hough space (pos)", CV_WINDOW_NORMAL);
     image_raw_sub_ =
         nh_.subscribe("/dvs/image_raw", 0, &Detector::imageCallback, this);
   }
@@ -419,8 +419,6 @@ void Detector::visualizeCurrentLineDetections(
     }
   }
 
-  cv::imshow("Detected poles", cur_frame);
-
   // Window for visualization.
   cv::Mat cv_hough_pos(
       kHoughRadiusResolution, kHoughAngularResolution, CV_8UC1);
@@ -429,12 +427,28 @@ void Detector::visualizeCurrentLineDetections(
 
   for (int i = 0; i < hough_pos.rows(); i++) {
     for (int j = 0; j < hough_pos.cols(); j++) {
-      cv_hough_pos.at<uint8_t>(i, j) = static_cast<uint8_t>(hough_pos(i, j) * 8);
-      cv_hough_neg.at<uint8_t>(i, j) = static_cast<uint8_t>(hough_neg(i, j) * 8);
+      cv_hough_pos.at<uint8_t>(i, j) =
+          static_cast<uint8_t>(hough_pos(i, j) * 8);
+      cv_hough_neg.at<uint8_t>(i, j) =
+          static_cast<uint8_t>(hough_neg(i, j) * 8);
     }
   }
 
-  cv::imshow("Hough Space", cv_hough_pos);
+  cv::cvtColor(cv_hough_pos, cv_hough_pos, cv::COLOR_GRAY2BGR);
+  cv::cvtColor(cv_hough_neg, cv_hough_neg, cv::COLOR_GRAY2BGR);
+
+  for (auto& maxima : cur_maxima_list[num_events - 1]) {
+    if (maxima.polarity) {
+      cv_hough_pos.at<cv::Vec3b>(maxima.r, maxima.theta_idx) =
+          cv::Vec3b(0, 0, 255);
+    } else {
+      cv_hough_neg.at<cv::Vec3b>(maxima.r, maxima.theta_idx) =
+          cv::Vec3b(0, 0, 255);
+    }
+  }
+
+  cv::imshow("Detected poles", cur_frame);
+  cv::imshow("Hough space (pos)", cv_hough_pos);
   cv::waitKey(1);
 }
 
