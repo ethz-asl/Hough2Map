@@ -1,7 +1,5 @@
 #include <chrono>
-#include <omp.h>
 #include <ros/package.h>
-#include <thread>
 
 #include "hough2map/detector.h"
 
@@ -66,8 +64,6 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   // Compute undistortion for given camera parameters.
   computeUndistortionMapping();
 
-  omp_set_num_threads(kNumThreads);
-
   // Various subscribers and publishers for event and odometry data.
   feature_pub_ = nh_.advertise<dvs_msgs::EventArray>("/feature_events", 1);
   event_sub_ = nh_.subscribe("/dvs/events", 0, &Detector::eventCallback, this);
@@ -81,14 +77,15 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   // Plot current hough detections in the video.
   if (FLAGS_show_lines_in_video) {
     cv::namedWindow("Detected poles", CV_WINDOW_NORMAL);
+    cv::namedWindow("Hough Space", CV_WINDOW_NORMAL);
     image_raw_sub_ =
         nh_.subscribe("/dvs/image_raw", 0, &Detector::imageCallback, this);
   }
 
   // Initializig theta, sin and cos values.
   initializeSinCosMap(
-      thetas_, polar_param_mapping_, kHough1MinAngle, kHough1MaxAngle,
-      kHough1AngularResolution);
+      thetas_, polar_param_mapping_, kHoughMinAngle, kHoughMaxAngle,
+      kHoughAngularResolution);
 
   // Initializing various transformation matrizes.
   initializeTransformationMatrices();
@@ -100,18 +97,15 @@ Detector::~Detector() {
   }
 }
 
-const int Detector::kHough1AngularResolution;
-const int Detector::kHough1RadiusResolution;
+const int Detector::kHoughAngularResolution;
+const int Detector::kHoughRadiusResolution;
 
 void Detector::initializeTransformationMatrices() {
   // Initialize transformation matrices.
-
   // Rotating camera relative to train.
   C_camera_train_ << 0, -1, 0, 1, 0, 0, 0, 0, 1;
-
   // GPS offset to center of train in meters.
   gps_offset_ << 1, 0, 0, 0, 1, -0.8, 0, 0, 1;
-
   // Camera offset to center of train in meters.
   camera_train_offset_ << 1, 0, -FLAGS_camera_offset_x, 0, 1,
       FLAGS_camera_offset_y, 0, 0, 1;
@@ -316,27 +310,15 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   // Computing all the radii for each theta hypothesis. This parameter pair
   // forms the Hough space. This is done all at once for each event.
   Eigen::MatrixXi radii;
-  radii.resize(kHough1AngularResolution, num_events);
+  radii.resize(kHoughAngularResolution, num_events);
   radii = (polar_param_mapping_ * points).cast<int>();
-
-  // Total Hough Space at NMS Intervals
-  // kNmsBatchCount is the reduced number of iterations. This is basically
-  // the number of sub-batches that will be processed in parallel
-  CHECK_GE(kNumThreads, 1);
-  int nms_recompute_window =
-      std::ceil(float(num_events - FLAGS_hough_window_size) / kNumThreads);
-  nms_recompute_window =
-      std::max(nms_recompute_window, FLAGS_hough_window_size);
-  CHECK_GT(nms_recompute_window, 0);
-  const int kNmsBatchCount = std::ceil(
-      float(num_events - FLAGS_hough_window_size) / nms_recompute_window);
 
   // Initializing total Hough spaces. Total means the Hough Space for a full
   // current window, rather than the Hough Space of an individual event. It is
   // therefore the sum of all the Hough Spaces of the events in the current
   // window.
-  std::vector<MatrixHough> total_hough_spaces_pos(kNmsBatchCount);
-  std::vector<MatrixHough> total_hough_spaces_neg(kNmsBatchCount);
+  MatrixHough total_hough_spaces_pos;
+  MatrixHough total_hough_spaces_neg;
 
   // At this point we are starting the parallelisation scheme of this
   // pipeline. As events have to be processed sequentially, the sequence is
@@ -344,23 +326,14 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   // previous one. This beginning state is computed using a full HT and full
   // NMS.
 
-  // Resetting the accumulator cells of all Hough spaces for the beginning of
-  // all batches.
-#pragma omp parallel for
-  for (int i = 0; i < kNmsBatchCount; i++) {
-    total_hough_spaces_pos[i].setZero();
-    total_hough_spaces_neg[i].setZero();
-  }
+  // Resetting the accumulator cells of all Hough spaces
+  total_hough_spaces_pos.setZero();
+  total_hough_spaces_neg.setZero();
 
-  // Computing total Hough space every N steps, so for the beginning of each
-  // parallelisation batch. This depends on the last FLAGS_hough_window_size
-  // of the previous batch.
-#pragma omp parallel for
-  for (int i = 0; i < kNmsBatchCount; i++) {
-    computeFullHoughTransform(
-        i, nms_recompute_window, total_hough_spaces_pos[i],
-        total_hough_spaces_neg[i], radii);
-  }
+  // Computing total Hough space every at the beginning. This depends on the
+  // last FLAGS_hough_window_size of the previous batch.
+  computeFullHoughTransform(
+      total_hough_spaces_pos, total_hough_spaces_neg, radii);
 
   // Each event is treated as a timestep. For each of these timesteps we keep
   // the active set of maxima in the Hough Space. These are basically the line
@@ -370,25 +343,18 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
 
   // As we compute a full HT at the beginning of each batch, we also need a
   // full NMS. This is computed here.
-#pragma omp parallel for
-  for (int k = 0; k < kNmsBatchCount; k++) {
-    computeFullNMS(
-        k, nms_recompute_window, total_hough_spaces_pos[k],
-        total_hough_spaces_neg[k], maxima_list);
-  }
+  computeFullNMS(total_hough_spaces_pos, total_hough_spaces_neg, maxima_list);
 
   // Within each parallelised NMS batch, we can now perform the rest of the
   // computations iterativels, processing the events in their correct
   // sequence. This is done in parallel for all batches.
-#pragma omp parallel for
-  for (int k = 0; k < kNmsBatchCount; k++) {
-    itterativeNMS(
-        k, nms_recompute_window, total_hough_spaces_pos[k],
-        total_hough_spaces_neg[k], maxima_list, radii);
-  }
+  itterativeNMS(
+      total_hough_spaces_pos, total_hough_spaces_neg, maxima_list, radii);
+
   // If visualizations are turned on display them in the video stream.
   if (FLAGS_show_lines_in_video) {
-    visualizeCurrentLineDetections(maxima_list);
+    visualizeCurrentLineDetections(
+        maxima_list, total_hough_spaces_pos, total_hough_spaces_neg);
   }
 
   // Publish events that were part of the Hough transform (because they were
@@ -417,8 +383,8 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
 // This function only visualizes vertical lines, for other orientations it needs
 // to be adjusted.
 void Detector::visualizeCurrentLineDetections(
-    const std::vector<std::vector<hough2map::Detector::line>>&
-        cur_maxima_list) {
+    const std::vector<std::vector<hough2map::Detector::line>>& cur_maxima_list,
+    const MatrixHough& hough_pos, const MatrixHough& hough_neg) {
   int num_events = feature_msg_.events.size();
 
   int positive_detections[camera_resolution_width_] = {0};
@@ -435,7 +401,9 @@ void Detector::visualizeCurrentLineDetections(
     }
   }
 
-  cv::Mat cur_frame = cur_greyscale_img_;
+  image_callback_mutex_.lock();
+  cv::Mat cur_frame = cur_greyscale_img_.clone();
+  image_callback_mutex_.unlock();
 
   // Plotting current line detections.
   for (int i = 0; i < camera_resolution_width_; i++) {
@@ -452,13 +420,27 @@ void Detector::visualizeCurrentLineDetections(
   }
 
   cv::imshow("Detected poles", cur_frame);
+
+  // Window for visualization.
+  cv::Mat cv_hough_pos(
+      kHoughRadiusResolution, kHoughAngularResolution, CV_8UC1);
+  cv::Mat cv_hough_neg(
+      kHoughRadiusResolution, kHoughAngularResolution, CV_8UC1);
+
+  for (int i = 0; i < hough_pos.rows(); i++) {
+    for (int j = 0; j < hough_pos.cols(); j++) {
+      cv_hough_pos.at<uint8_t>(i, j) = static_cast<uint8_t>(hough_pos(i, j) * 8);
+      cv_hough_neg.at<uint8_t>(i, j) = static_cast<uint8_t>(hough_neg(i, j) * 8);
+    }
+  }
+
+  cv::imshow("Hough Space", cv_hough_pos);
   cv::waitKey(1);
 }
 
 // Performing itterative Non-Maximum suppression on the current batch of
 // events based on a beginning Hough Space.
 void Detector::itterativeNMS(
-    const int time_step, const int nms_recompute_window,
     MatrixHough& total_hough_space_pos, MatrixHough& total_hough_space_neg,
     std::vector<std::vector<hough2map::Detector::line>>& cur_maxima_list,
     const Eigen::MatrixXi& radii) {
@@ -470,9 +452,8 @@ void Detector::itterativeNMS(
 
   // Itterating over all events which are part of this current batch. These
   // will be added and removed through the iteration process.
-  const int left =
-      FLAGS_hough_window_size + time_step * nms_recompute_window + 1;
-  const int right = std::min(left + nms_recompute_window - 1, num_events);
+  const int left = FLAGS_hough_window_size;
+  const int right = num_events;
   CHECK_GE(right, left);
 
   for (int l = left; l < right; l++) {
@@ -516,10 +497,10 @@ void Detector::itterativeNMS(
     /* Phase 1 - Obtain candidates for global maxima */
 
     // For points that got incremented.
-    for (int i = 0; i < kHough1AngularResolution; ++i) {
+    for (int i = 0; i < kHoughAngularResolution; ++i) {
       const int kRadius = radii(i, l);
 
-      if ((kRadius >= 0) && (kRadius < kHough1RadiusResolution)) {
+      if ((kRadius >= 0) && (kRadius < kHoughRadiusResolution)) {
         if (event.polarity) {
           bool skip_center = false;
           updateIncrementedNMS(
@@ -546,10 +527,10 @@ void Detector::itterativeNMS(
     }
 
     // For accumulator cells that got decremented.
-    for (int i = 0; i < kHough1AngularResolution; i++) {
+    for (int i = 0; i < kHoughAngularResolution; i++) {
       const int kRadius = radii(i, kLRemove);
 
-      if ((kRadius >= 0) && (kRadius < kHough1RadiusResolution)) {
+      if ((kRadius >= 0) && (kRadius < kHoughRadiusResolution)) {
         if (event_remove.polarity) {
           updateDecrementedNMS(
               kTimestamp, event_remove.polarity, i, kRadius,
@@ -683,9 +664,9 @@ void Detector::updateDecrementedNMS(
     // Iterate over neighbourhood to check if we might have
     // created a new local maxima by decreasing.
     const int m_l = std::max(kAngle - 1, 0);
-    const int m_r = std::min(kAngle + 1, kHough1AngularResolution - 1);
+    const int m_r = std::min(kAngle + 1, kHoughAngularResolution - 1);
     const int n_l = std::max(kRadius - 1, 0);
-    const int n_r = std::min(kRadius + 1, kHough1RadiusResolution - 1);
+    const int n_r = std::min(kRadius + 1, kHoughRadiusResolution - 1);
     for (int m = m_l; m <= m_r; m++) {
       for (int n = n_l; n <= n_r; n++) {
         // The center is a separate case.
@@ -721,9 +702,9 @@ bool Detector::updateIncrementedNMS(
   // Iterate over neighbourhood to check if we might have
   // supressed a surrounding maximum by growing.
   const int m_l = std::max(kAngle - 1, 0);
-  const int m_r = std::min(kAngle + 1, kHough1AngularResolution - 1);
+  const int m_r = std::min(kAngle + 1, kHoughAngularResolution - 1);
   const int n_l = std::max(kRadius - 1, 0);
-  const int n_r = std::min(kRadius + 1, kHough1RadiusResolution - 1);
+  const int n_r = std::min(kRadius + 1, kHoughRadiusResolution - 1);
   for (int m = m_l; m <= m_r; m++) {
     for (int n = n_l; n <= n_r; n++) {
       // The center is a separate case.
@@ -786,14 +767,12 @@ bool Detector::updateIncrementedNMS(
 
 // Computing a full Non-Maximum Suppression for a given current Hough Space.
 void Detector::computeFullNMS(
-    const int time_step, const int nms_recompute_window,
     const MatrixHough& total_hough_space_pos,
     const MatrixHough& total_hough_space_neg,
     std::vector<std::vector<hough2map::Detector::line>>& cur_maxima_list) {
   // Index of the current event in the frame of all events of the current
   // message with carry-over from previous message.
-  const int kNmsIndex =
-      FLAGS_hough_window_size + time_step * nms_recompute_window;
+  const int kNmsIndex = FLAGS_hough_window_size - 1;
   std::vector<hough2map::Detector::line>& current_maxima =
       cur_maxima_list[kNmsIndex];
 
@@ -802,8 +781,8 @@ void Detector::computeFullNMS(
   std::vector<int> new_maxima_value;
 
   // Checking every angle and radius hypothesis.
-  for (int i = 0; i < kHough1AngularResolution; i++) {
-    for (int j = 0; j < kHough1RadiusResolution; j++) {
+  for (int i = 0; i < kHoughAngularResolution; i++) {
+    for (int j = 0; j < kHoughRadiusResolution; j++) {
       // Get the current events for a current time stamp.
       const dvs_msgs::Event& event = feature_msg_.events[kNmsIndex];
 
@@ -836,18 +815,11 @@ void Detector::computeFullNMS(
 // Computing a full Hough Space based on a current set of events and their
 // respective Hough parameters.
 void Detector::computeFullHoughTransform(
-    const int time_step, const int nms_recompute_window,
     MatrixHough& total_hough_space_pos, MatrixHough& total_hough_space_neg,
     const Eigen::MatrixXi& radii) {
   // Looping over all events that have an influence on the current total
-  // Hough space, so the past 300.
-  const int kRight = FLAGS_hough_window_size + time_step * nms_recompute_window;
-  const int kLeft = kRight - FLAGS_hough_window_size;
-  CHECK_GT(kRight, kLeft);
-
-  for (int j = kRight; j > kLeft; j--) {
-    // Looping over all confirmed hypothesis and adding them to the Hough
-    // space.
+  // Hough space (i.e. fall in the detection window).
+  for (int j = 0; j < FLAGS_hough_window_size; j++) {
     updateHoughSpaceVotes(
         true, j, feature_msg_.events[j].polarity, radii, total_hough_space_pos,
         total_hough_space_neg);
@@ -861,10 +833,10 @@ void Detector::updateHoughSpaceVotes(
     MatrixHough& hough_space_neg) {
   // Looping over all confirmed hypothesis and adding or removing them from the
   // Hough space.
-  for (int k = 0; k < kHough1AngularResolution; k++) {
+  for (int k = 0; k < kHoughAngularResolution; k++) {
     const int kRadius = radii(k, event_idx);
     // making sure the parameter set is within the domain of the HS.
-    if ((kRadius >= 0) && (kRadius < kHough1RadiusResolution)) {
+    if ((kRadius >= 0) && (kRadius < kHoughRadiusResolution)) {
       // Incrementing or decrement the respective accumulator cells.
       if (pol) {
         if (increment) {
@@ -925,7 +897,6 @@ void Detector::eventPreProcessing(
   CHECK_NOTNULL(ptr);
 
   if (FLAGS_perform_camera_undistortion) {
-#pragma omp parallel for
     for (int i = 0; i < num_events; i++) {
       const dvs_msgs::Event& event = feature_msg_.events[i];
 
@@ -933,7 +904,6 @@ void Detector::eventPreProcessing(
       *(ptr + 2 * i + 1) = undist_map_y_(event.y, event.x);
     }
   } else {
-#pragma omp parallel for
     for (int i = 0; i < num_events; i++) {
       const dvs_msgs::Event& event = feature_msg_.events[i];
 
@@ -962,10 +932,10 @@ void Detector::addMaximaInRadius(
     std::vector<hough2map::Detector::line>* new_maxima,
     std::vector<int>* new_maxima_value, bool skip_center) {
   int m_l = std::max(i - FLAGS_hough_nms_radius, 0);
-  int m_r = std::min(i + FLAGS_hough_nms_radius + 1, kHough1AngularResolution);
+  int m_r = std::min(i + FLAGS_hough_nms_radius + 1, kHoughAngularResolution);
   int n_l = std::max(radius - FLAGS_hough_nms_radius, 0);
   int n_r =
-      std::min(radius + FLAGS_hough_nms_radius + 1, kHough1RadiusResolution);
+      std::min(radius + FLAGS_hough_nms_radius + 1, kHoughRadiusResolution);
 
   for (int m = m_l; m < m_r; m++) {
     for (int n = n_l; n < n_r; n++) {
@@ -1083,6 +1053,7 @@ void Detector::imageCallback(const sensor_msgs::Image::ConstPtr& msg) {
     return;
   }
 
+  const std::lock_guard<std::mutex> lock(image_callback_mutex_);
   cur_greyscale_img_ = cv_ptr->image;
   cv::cvtColor(cur_greyscale_img_, cur_greyscale_img_, cv::COLOR_GRAY2BGR);
 }
