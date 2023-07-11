@@ -2,6 +2,12 @@
 
 #include <chrono>
 #include <ros/package.h>
+#include <rosbag/bag.h>
+#include <rosbag/view.h>
+
+DEFINE_string(rosbag_path, "", "Rosbag to process.");
+DEFINE_string(event_topic, "/dvs/events", "Topic for event messages.");
+DEFINE_string(image_topic, "/dvs/image_raw", "Topic for image messages.");
 
 DEFINE_int32(
     hough_threshold, 15, "Threshold for the first level Hough transform.");
@@ -41,6 +47,7 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   CHECK_GT(FLAGS_event_subsample_factor, 0);
   CHECK_GE(FLAGS_buffer_size_s, 1);
   CHECK_GT(FLAGS_hough_threshold, 0);
+  CHECK(!FLAGS_rosbag_path.empty());
 
   // Output file for the map data.
   if (FLAGS_map_output) {
@@ -66,31 +73,63 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   // Compute undistortion for given camera parameters.
   computeUndistortionMapping();
 
-  // Various subscribers and publishers for event and odometry data.
-  feature_pub_ = nh_.advertise<dvs_msgs::EventArray>("/feature_events", 1);
-  event_sub_ = nh_.subscribe("/dvs/events", 10000, &Detector::eventCallback, this);
-  GPS_pos_ =
-      nh_.subscribe("/oxts/position", 0, &Detector::positionCallback, this);
-  GPS_vel_ =
-      nh_.subscribe("/oxts/velocity", 0, &Detector::velocityCallback, this);
-  GPS_orient_ = nh_.subscribe(
-      "/oxts/orientation", 0, &Detector::orientationCallback, this);
-
-  // Plot current hough detections in the video.
-  if (FLAGS_show_lines_in_video) {
-    cv::namedWindow("Detected poles", cv::WINDOW_NORMAL);
-    cv::namedWindow("Hough space (pos)", cv::WINDOW_NORMAL);
-    image_raw_sub_ =
-        nh_.subscribe("/dvs/image_raw", 10000, &Detector::imageCallback, this);
-  }
-
-  // Initializig theta, sin and cos values.
+  // Precompute theta, sin and cos values.
   initializeSinCosMap(
       thetas_, polar_param_mapping_, kHoughMinAngle, kHoughMaxAngle,
       kHoughAngularResolution);
 
-  // Initializing various transformation matrizes.
+  // Initialize various transformation matrizes.
   initializeTransformationMatrices();
+
+  // Open the input bag.
+  rosbag::Bag bag;
+  try {
+    LOG(INFO) << "Opening bag: " << FLAGS_rosbag_path << ".";
+    bag.open(FLAGS_rosbag_path, rosbag::bagmode::Read);
+  } catch (const std::exception& ex) {  // NOLINT
+    LOG(FATAL) << "Could not open the rosbag " << FLAGS_rosbag_path << ": "
+               << ex.what();
+  }
+
+  // Select relevant topics.
+  std::vector<std::string> topics;
+  topics.emplace_back(FLAGS_event_topic);
+
+  if (FLAGS_show_lines_in_video) {
+    LOG(WARNING)
+        << "Visualization can be very slow, especially when using low values "
+        << "for --show_lines_every_nth.";
+
+    cv::namedWindow("Detected poles", cv::WINDOW_NORMAL);
+    cv::namedWindow("Hough space (pos)", cv::WINDOW_NORMAL);
+
+    topics.emplace_back(FLAGS_image_topic);
+  }
+
+  // Iterate over the bag and invoke the appropriate callbacks.
+  rosbag::View bag_view(bag, rosbag::TopicQuery(topics));
+  rosbag::View::iterator it_message = bag_view.begin();
+  while (it_message != bag_view.end()) {
+    const rosbag::MessageInstance& message = *it_message;
+    const std::string& topic = message.getTopic();
+    CHECK(!topic.empty());
+
+    if (topic == FLAGS_event_topic) {
+      dvs_msgs::EventArray::ConstPtr event_message =
+          message.instantiate<dvs_msgs::EventArray>();
+      CHECK(event_message);
+      eventCallback(event_message);
+    } else if (topic == FLAGS_image_topic) {
+      sensor_msgs::Image::ConstPtr image_message =
+          message.instantiate<sensor_msgs::Image>();    
+      CHECK(image_message);
+      imageCallback(image_message);
+    }
+
+    ++it_message;
+  }
+
+  bag.close();
 }
 
 Detector::~Detector() {

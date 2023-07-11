@@ -1,10 +1,10 @@
 <launch>
   <!-- rosbag playback -->
-  <arg name="bag" />
-  <node pkg="rosbag" type="play" name="rosbag" args="$(arg bag) -q -d 3 -s 0 -r 0.2 --queue=10000"/>
+  <arg name="bag"/>
 
   <!-- mapping pipeline -->
   <node name="hough2map" pkg="hough2map" type="hough2map" output="screen">
+    <param name="rosbag_path" value="$(arg bag)"/>
     <param name="hough_window_size" value="1000"/>
     <param name="hough_threshold" value="45"/>
     <param name="camera_offset_x" value="2.055"/>
@@ -15,21 +15,4 @@
     <param name="show_lines_every_nth" value="100"/>
     <param name="odometry_event_alignment" value="-0.314897455547225"/>
   </node>
-
-  <!-- event visualization -->
-  <?ignore
-  <node name="dvs_renderer_events" pkg="dvs_renderer" type="dvs_renderer">
-    <param name="display_method" value="red-blue"/>
-    <param name="num_event_msgs" value="1"/>
-    <remap from="events" to="/dvs/events" />
-    <remap from="image" to="/dvs/image_raw" />
-    <remap from="camera_info" to="/dvs/camera_info" />
-  </node>
-
-  <node name="image_view" pkg="rqt_image_view" type="rqt_image_view">
-    <remap from="image" to="dvs_rendering"/>
-  </node>
-  ?>
-
-
 </launch>

@@ -20,7 +20,5 @@ int main(int argc, char *argv[]) {
 
   hough2map::Detector detector(nh, nh_private);
 
-  ros::spin();
-
   return 0;
 }
