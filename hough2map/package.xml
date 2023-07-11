@@ -24,5 +24,4 @@
   <depend>cv_bridge</depend>
   <depend>glog_catkin</depend>
   <depend>gflags_catkin</depend>
-  <depend>dvs_renderer</depend>
 </package>
