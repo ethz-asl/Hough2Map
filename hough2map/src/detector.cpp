@@ -15,6 +15,8 @@ DEFINE_int32(
     event_subsample_factor, 1, "Subsample Events by a constant factor");
 DEFINE_bool(
     show_lines_in_video, false, "Plot detected lines in the video stream");
+DEFINE_int32(
+    show_lines_every_nth, 10, "Event frequency at which to plot the lines.");
 DEFINE_bool(map_output, false, "Export detected poles to file");
 
 DEFINE_bool(odometry_available, true, "A GPS Odometry is available");
@@ -66,7 +68,7 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
 
   // Various subscribers and publishers for event and odometry data.
   feature_pub_ = nh_.advertise<dvs_msgs::EventArray>("/feature_events", 1);
-  event_sub_ = nh_.subscribe("/dvs/events", 0, &Detector::eventCallback, this);
+  event_sub_ = nh_.subscribe("/dvs/events", 10000, &Detector::eventCallback, this);
   GPS_pos_ =
       nh_.subscribe("/oxts/position", 0, &Detector::positionCallback, this);
   GPS_vel_ =
@@ -79,7 +81,7 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
     cv::namedWindow("Detected poles", CV_WINDOW_NORMAL);
     cv::namedWindow("Hough space (pos)", CV_WINDOW_NORMAL);
     image_raw_sub_ =
-        nh_.subscribe("/dvs/image_raw", 0, &Detector::imageCallback, this);
+        nh_.subscribe("/dvs/image_raw", 10000, &Detector::imageCallback, this);
   }
 
   // Initializig theta, sin and cos values.
@@ -387,45 +389,44 @@ void Detector::visualizeCurrentLineDetections(
     const MatrixHough& hough_pos, const MatrixHough& hough_neg) {
   int num_events = feature_msg_.events.size();
 
-  int positive_detections[camera_resolution_width_] = {0};
-  int negative_detections[camera_resolution_width_] = {0};
-
   // Getting the horizontal positions of all vertical line detections.
-  for (int i = 0; i < num_events; i++) {
+  size_t step_size = FLAGS_show_lines_every_nth;
+  for (size_t i = FLAGS_hough_window_size - 1; i < num_events; i += step_size) {
+    image_callback_mutex_.lock();
+    cv::Mat cur_frame = cur_greyscale_img_.clone();
+    image_callback_mutex_.unlock();
+
+    for (size_t j = i - FLAGS_hough_window_size + 1; j <= i; j++) {
+      const dvs_msgs::Event& event = feature_msg_.events[j];
+      cur_frame.at<cv::Vec3b>(event.y, event.x) =
+          event.polarity ? cv::Vec3b(0, 0, 255) : cv::Vec3b(255, 0, 0);
+    }
+
     for (auto& maxima : cur_maxima_list[i]) {
       if (maxima.polarity) {
-        positive_detections[maxima.r] = 1;
+        cv::line(
+            cur_frame, cv::Point(maxima.r, 0),
+            cv::Point(maxima.r, camera_resolution_height_),
+            cv::Scalar(0, 0, 255), 2, 8);
       } else {
-        negative_detections[maxima.r] = 1;
+        cv::line(
+            cur_frame, cv::Point(maxima.r, 0),
+            cv::Point(maxima.r, camera_resolution_height_),
+            cv::Scalar(255, 0, 0), 2, 8);
       }
     }
+
+    cv::imshow("Detected poles", cur_frame);
+    cv::waitKey(1);
+
+    // Hough space images for visualization.
+    // cv::Mat cv_hough_pos(
+    //    kHoughRadiusResolution, kHoughAngularResolution, CV_8UC1);
+    // cv::Mat cv_hough_neg(
+    //    kHoughRadiusResolution, kHoughAngularResolution, CV_8UC1);
   }
 
-  image_callback_mutex_.lock();
-  cv::Mat cur_frame = cur_greyscale_img_.clone();
-  image_callback_mutex_.unlock();
-
-  // Plotting current line detections.
-  for (int i = 0; i < camera_resolution_width_; i++) {
-    if (positive_detections[i] == 1) {
-      cv::line(
-          cur_frame, cv::Point(i, 0), cv::Point(i, camera_resolution_height_),
-          cv::Scalar(255, 0, 0), 2, 8);
-    }
-    if (negative_detections[i] == 1) {
-      cv::line(
-          cur_frame, cv::Point(i, 0), cv::Point(i, camera_resolution_height_),
-          cv::Scalar(0, 0, 255), 2, 8);
-    }
-  }
-
-  // Window for visualization.
-  cv::Mat cv_hough_pos(
-      kHoughRadiusResolution, kHoughAngularResolution, CV_8UC1);
-  cv::Mat cv_hough_neg(
-      kHoughRadiusResolution, kHoughAngularResolution, CV_8UC1);
-
-  for (int i = 0; i < hough_pos.rows(); i++) {
+  /*for (int i = 0; i < hough_pos.rows(); i++) {
     for (int j = 0; j < hough_pos.cols(); j++) {
       cv_hough_pos.at<uint8_t>(i, j) =
           static_cast<uint8_t>(hough_pos(i, j) * 8);
@@ -445,11 +446,9 @@ void Detector::visualizeCurrentLineDetections(
       cv_hough_neg.at<cv::Vec3b>(maxima.r, maxima.theta_idx) =
           cv::Vec3b(0, 0, 255);
     }
-  }
+  }*/
 
-  cv::imshow("Detected poles", cur_frame);
-  cv::imshow("Hough space (pos)", cv_hough_pos);
-  cv::waitKey(1);
+  // cv::imshow("Hough space (pos)", cv_hough_pos);
 }
 
 // Performing itterative Non-Maximum suppression on the current batch of
