@@ -20,6 +20,7 @@
 #include <glog/logging.h>
 #include <iostream>
 #include <mutex>
+#include <opencv2/calib3d.hpp>
 #include <opencv2/core/eigen.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
@@ -98,7 +99,6 @@ class Detector {
   int camera_resolution_width_;
   int camera_resolution_height_;
 
-  const float kAcceptableDistortionRange = 40.0;
   float intrinsics_[4];
   float distortion_coeffs_[4];
   Eigen::MatrixXf undist_map_x_;

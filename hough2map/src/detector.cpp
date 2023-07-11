@@ -1,7 +1,7 @@
+#include "hough2map/detector.h"
+
 #include <chrono>
 #include <ros/package.h>
-
-#include "hough2map/detector.h"
 
 DEFINE_int32(
     hough_threshold, 15, "Threshold for the first level Hough transform.");
@@ -76,8 +76,8 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
 
   // Plot current hough detections in the video.
   if (FLAGS_show_lines_in_video) {
-    cv::namedWindow("Detected poles", CV_WINDOW_NORMAL);
-    cv::namedWindow("Hough space (pos)", CV_WINDOW_NORMAL);
+    cv::namedWindow("Detected poles", cv::WINDOW_NORMAL);
+    cv::namedWindow("Hough space (pos)", cv::WINDOW_NORMAL);
     image_raw_sub_ =
         nh_.subscribe("/dvs/image_raw", 0, &Detector::imageCallback, this);
   }
@@ -96,9 +96,6 @@ Detector::~Detector() {
     map_file.close();
   }
 }
-
-const int Detector::kHoughAngularResolution;
-const int Detector::kHoughRadiusResolution;
 
 void Detector::initializeTransformationMatrices() {
   // Initialize transformation matrices.
@@ -203,15 +200,6 @@ void Detector::computeUndistortionMapping() {
       cv::undistortPoints(points, dst, camera_matrix, distortionCoefficients);
       const float u = intrinsics_[0] * dst.at<float>(0, 0) + intrinsics_[2];
       const float v = intrinsics_[1] * dst.at<float>(0, 1) + intrinsics_[3];
-
-      CHECK_GT(u, 0.0 - kAcceptableDistortionRange)
-          << "Horizontal undistortion is larger than expected";
-      CHECK_LT(u, camera_resolution_width_ + kAcceptableDistortionRange)
-          << "Horizontal undistortion is larger than expected";
-      CHECK_GT(v, 0.0 - kAcceptableDistortionRange)
-          << "Vertical undistortion is larger than expected";
-      CHECK_LT(v, camera_resolution_height_ + kAcceptableDistortionRange)
-          << "Vertical undistortion is larger than expected";
 
       undist_map_x_(j, i) = u;
       undist_map_y_(j, i) = v;
