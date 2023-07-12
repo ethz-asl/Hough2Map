@@ -224,26 +224,44 @@ void Detector::computeUndistortionMapping() {
   cv::Mat camera_matrix =
       (cv::Mat1d(3, 3) << intrinsics_[0], 0, intrinsics_[2], 0, intrinsics_[1],
        intrinsics_[3], 0, 0, 1);
-  cv::Mat distortionCoefficients =
+  cv::Mat distortion_coeffs =
       (cv::Mat1d(1, 4) << distortion_coeffs_[0], distortion_coeffs_[1],
        distortion_coeffs_[2], distortion_coeffs_[3]);
 
-  undist_map_x_.resize(camera_resolution_height_, camera_resolution_width_);
-  undist_map_y_.resize(camera_resolution_height_, camera_resolution_width_);
+  cv::Size image_size =
+      cv::Size(camera_resolution_width_, camera_resolution_height_);
+  cv::Mat optimal_matrix = cv::getOptimalNewCameraMatrix(
+      camera_matrix, distortion_coeffs, image_size, 1.0);
 
-  // Compute undistortion mapping.
-  for (int i = 0; i < camera_resolution_width_; i++) {
-    for (int j = 0; j < camera_resolution_height_; j++) {
-      cv::Mat_<cv::Point2f> points(1, 1);
-      points(0) = cv::Point2f(i, j);
-      cv::Mat dst;
+  cv::initUndistortRectifyMap(
+      camera_matrix, distortion_coeffs, cv::Mat::eye(3, 3, CV_32F),
+      optimal_matrix, image_size, CV_32F, image_undist_map_x_, image_undist_map_y_);
 
-      cv::undistortPoints(points, dst, camera_matrix, distortionCoefficients);
-      const float u = intrinsics_[0] * dst.at<float>(0, 0) + intrinsics_[2];
-      const float v = intrinsics_[1] * dst.at<float>(0, 1) + intrinsics_[3];
+  // Compute also the inverse mapping from distorted event points to the
+  // undistorted image plane.
+  std::vector<cv::Point2f> points;
+  for (int i = 0; i < camera_resolution_width_; ++i) {
+    for (int j = 0; j < camera_resolution_height_; ++j) {
+      points.emplace_back(cv::Point2f(i, j));
+    }
+  }
 
-      undist_map_x_(j, i) = u;
-      undist_map_y_(j, i) = v;
+  std::vector<cv::Point2f> points_undist;
+  cv::undistortPoints(
+        points, points_undist, camera_matrix, distortion_coeffs, cv::noArray(),
+        optimal_matrix);
+
+  event_undist_map_x_.resize(camera_resolution_height_, camera_resolution_width_);
+  event_undist_map_y_.resize(camera_resolution_height_, camera_resolution_width_);
+
+  size_t index = 0;
+  for (int i = 0; i < camera_resolution_width_; ++i) {
+    for (int j = 0; j < camera_resolution_height_; ++j) {
+      event_undist_map_x_(j, i) = points_undist[index].x;
+      event_undist_map_y_(j, i) = points_undist[index].y;
+      LOG(INFO) << i << " " << event_undist_map_x_(j, i) << " "
+                << j << " " << event_undist_map_y_(j, i);
+      ++index;
     }
   }
 }
@@ -383,7 +401,7 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   // If visualizations are turned on display them in the video stream.
   if (FLAGS_show_lines_in_video) {
     visualizeCurrentLineDetections(
-        maxima_list, total_hough_spaces_pos, total_hough_spaces_neg);
+        points, maxima_list, total_hough_spaces_pos, total_hough_spaces_neg);
   }
 
   // Publish events that were part of the Hough transform (because they were
@@ -412,70 +430,44 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
 // This function only visualizes vertical lines, for other orientations it needs
 // to be adjusted.
 void Detector::visualizeCurrentLineDetections(
+    const Eigen::MatrixXf& points, 
     const std::vector<std::vector<hough2map::Detector::line>>& cur_maxima_list,
-    const MatrixHough& hough_pos, const MatrixHough& hough_neg) {
+    const MatrixHough& hough_pos, const MatrixHough& hough_neg) const {
   int num_events = feature_msg_.events.size();
 
   // Getting the horizontal positions of all vertical line detections.
   size_t step_size = FLAGS_show_lines_every_nth;
   for (size_t i = FLAGS_hough_window_size - 1; i < num_events; i += step_size) {
-    image_callback_mutex_.lock();
-    cv::Mat cur_frame = cur_greyscale_img_.clone();
-    image_callback_mutex_.unlock();
+    cv::Mat vis_frame;
+    cv::remap(
+        cur_greyscale_img_, vis_frame, image_undist_map_x_, image_undist_map_y_,
+        cv::INTER_LINEAR);
 
     for (size_t j = i - FLAGS_hough_window_size + 1; j <= i; j++) {
       const dvs_msgs::Event& event = feature_msg_.events[j];
-      cur_frame.at<cv::Vec3b>(event.y, event.x) =
+      uint32_t x = static_cast<uint32_t>(points(0, j));
+      uint32_t y = static_cast<uint32_t>(points(1, j));
+      vis_frame.at<cv::Vec3b>(y, x) =
           event.polarity ? cv::Vec3b(0, 0, 255) : cv::Vec3b(255, 0, 0);
     }
 
     for (auto& maxima : cur_maxima_list[i]) {
       if (maxima.polarity) {
         cv::line(
-            cur_frame, cv::Point(maxima.r, 0),
+            vis_frame, cv::Point(maxima.r, 0),
             cv::Point(maxima.r, camera_resolution_height_),
             cv::Scalar(0, 0, 255), 2, 8);
       } else {
         cv::line(
-            cur_frame, cv::Point(maxima.r, 0),
+            vis_frame, cv::Point(maxima.r, 0),
             cv::Point(maxima.r, camera_resolution_height_),
             cv::Scalar(255, 0, 0), 2, 8);
       }
     }
 
-    cv::imshow("Detected poles", cur_frame);
+    cv::imshow("Detected poles", vis_frame);
     cv::waitKey(1);
-
-    // Hough space images for visualization.
-    // cv::Mat cv_hough_pos(
-    //    kHoughRadiusResolution, kHoughAngularResolution, CV_8UC1);
-    // cv::Mat cv_hough_neg(
-    //    kHoughRadiusResolution, kHoughAngularResolution, CV_8UC1);
   }
-
-  /*for (int i = 0; i < hough_pos.rows(); i++) {
-    for (int j = 0; j < hough_pos.cols(); j++) {
-      cv_hough_pos.at<uint8_t>(i, j) =
-          static_cast<uint8_t>(hough_pos(i, j) * 8);
-      cv_hough_neg.at<uint8_t>(i, j) =
-          static_cast<uint8_t>(hough_neg(i, j) * 8);
-    }
-  }
-
-  cv::cvtColor(cv_hough_pos, cv_hough_pos, cv::COLOR_GRAY2BGR);
-  cv::cvtColor(cv_hough_neg, cv_hough_neg, cv::COLOR_GRAY2BGR);
-
-  for (auto& maxima : cur_maxima_list[num_events - 1]) {
-    if (maxima.polarity) {
-      cv_hough_pos.at<cv::Vec3b>(maxima.r, maxima.theta_idx) =
-          cv::Vec3b(0, 0, 255);
-    } else {
-      cv_hough_neg.at<cv::Vec3b>(maxima.r, maxima.theta_idx) =
-          cv::Vec3b(0, 0, 255);
-    }
-  }*/
-
-  // cv::imshow("Hough space (pos)", cv_hough_pos);
 }
 
 // Performing itterative Non-Maximum suppression on the current batch of
@@ -940,8 +932,8 @@ void Detector::eventPreProcessing(
     for (int i = 0; i < num_events; i++) {
       const dvs_msgs::Event& event = feature_msg_.events[i];
 
-      *(ptr + 2 * i) = undist_map_x_(event.y, event.x);
-      *(ptr + 2 * i + 1) = undist_map_y_(event.y, event.x);
+      *(ptr + 2 * i) = event_undist_map_x_(event.y, event.x);
+      *(ptr + 2 * i + 1) = event_undist_map_y_(event.y, event.x);
     }
   } else {
     for (int i = 0; i < num_events; i++) {
@@ -1093,7 +1085,6 @@ void Detector::imageCallback(const sensor_msgs::Image::ConstPtr& msg) {
     return;
   }
 
-  const std::lock_guard<std::mutex> lock(image_callback_mutex_);
   cur_greyscale_img_ = cv_ptr->image;
   cv::cvtColor(cur_greyscale_img_, cur_greyscale_img_, cv::COLOR_GRAY2BGR);
 }

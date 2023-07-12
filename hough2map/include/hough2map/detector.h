@@ -19,7 +19,6 @@
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <iostream>
-#include <mutex>
 #include <opencv2/calib3d.hpp>
 #include <opencv2/core/eigen.hpp>
 #include <opencv2/highgui/highgui.hpp>
@@ -101,8 +100,11 @@ class Detector {
 
   float intrinsics_[4];
   float distortion_coeffs_[4];
-  Eigen::MatrixXf undist_map_x_;
-  Eigen::MatrixXf undist_map_y_;
+
+  cv::Mat image_undist_map_x_;
+  cv::Mat image_undist_map_y_;
+  Eigen::MatrixXf event_undist_map_x_;
+  Eigen::MatrixXf event_undist_map_y_;
 
   // ROS interface.
   ros::NodeHandle nh_;
@@ -193,9 +195,10 @@ class Detector {
       cv::Mat& image_space, float rho, float theta, cv::Scalar color);
   void imageCallback(const sensor_msgs::Image::ConstPtr& msg);
   void visualizeCurrentLineDetections(
+      const Eigen::MatrixXf& points, 
       const std::vector<std::vector<hough2map::Detector::line>>&
           cur_maxima_list,
-      const MatrixHough& hough_pos, const MatrixHough& hough_neg);
+      const MatrixHough& hough_pos, const MatrixHough& hough_neg) const;
 
   // Events from the previous dvs_msg need to be carried over to start of the
   // Hough computation of the next events. This basically ensures a continous
@@ -213,7 +216,6 @@ class Detector {
   Eigen::Matrix3d camera_train_offset_;
 
   // Storing the current result of the non-max-suppression.
-  std::mutex image_callback_mutex_;
   cv::Mat cur_greyscale_img_;
 };
 }  // namespace hough2map
