@@ -54,8 +54,7 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
     map_file.open(map_file_path);
 
     if (map_file.is_open()) {
-      map_file << "id,type,time,x,y,orientation,velocity,weight\n";
-
+      map_file << "time,rho,theta" << std::endl;
     } else {
       LOG(FATAL) << "Could not open file:" << map_file_path << std::endl;
     }
@@ -400,6 +399,15 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   if (FLAGS_show_lines_in_video) {
     visualizeCurrentLineDetections(
         points, maxima_list, total_hough_spaces_pos, total_hough_spaces_neg);
+  }
+
+  if (FLAGS_map_output) {
+    for (const auto& maximas : maxima_list) {
+      for (const Detector::line& maxima : maximas) {
+        map_file << maxima.time << "," << maxima.r << "," << maxima.theta
+                 << std::endl;
+      }
+    }
   }
 
   // Publish events that were part of the Hough transform (because they were
