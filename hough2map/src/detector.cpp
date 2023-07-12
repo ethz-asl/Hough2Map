@@ -259,8 +259,6 @@ void Detector::computeUndistortionMapping() {
     for (int j = 0; j < camera_resolution_height_; ++j) {
       event_undist_map_x_(j, i) = points_undist[index].x;
       event_undist_map_y_(j, i) = points_undist[index].y;
-      LOG(INFO) << i << " " << event_undist_map_x_(j, i) << " "
-                << j << " " << event_undist_map_y_(j, i);
       ++index;
     }
   }
@@ -453,15 +451,11 @@ void Detector::visualizeCurrentLineDetections(
 
     for (auto& maxima : cur_maxima_list[i]) {
       if (maxima.polarity) {
-        cv::line(
-            vis_frame, cv::Point(maxima.r, 0),
-            cv::Point(maxima.r, camera_resolution_height_),
-            cv::Scalar(0, 0, 255), 2, 8);
+        drawPolarCorLine(
+          vis_frame, maxima.r, maxima.theta, cv::Scalar(0, 0, 255)); 
       } else {
-        cv::line(
-            vis_frame, cv::Point(maxima.r, 0),
-            cv::Point(maxima.r, camera_resolution_height_),
-            cv::Scalar(255, 0, 0), 2, 8);
+        drawPolarCorLine(
+          vis_frame, maxima.r, maxima.theta, cv::Scalar(255, 0, 0)); 
       }
     }
 
@@ -946,7 +940,7 @@ void Detector::eventPreProcessing(
 }
 
 void Detector::drawPolarCorLine(
-    cv::Mat& image_space, float rho, float theta, cv::Scalar color) {
+    cv::Mat& image_space, float rho, float theta, cv::Scalar color) const {
   // Function to draw a line based on polar coordinates
   cv::Point pt1, pt2;
   const double a = cos(theta), b = sin(theta);

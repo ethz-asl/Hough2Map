@@ -192,7 +192,7 @@ class Detector {
 
   // Visualization functions.
   void drawPolarCorLine(
-      cv::Mat& image_space, float rho, float theta, cv::Scalar color);
+      cv::Mat& image_space, float rho, float theta, cv::Scalar color) const;
   void imageCallback(const sensor_msgs::Image::ConstPtr& msg);
   void visualizeCurrentLineDetections(
       const Eigen::MatrixXf& points, 
