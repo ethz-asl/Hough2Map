@@ -49,6 +49,11 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   CHECK_GT(FLAGS_hough_threshold, 0);
   CHECK(!FLAGS_rosbag_path.empty());
 
+  // Set initial status to false until first message is processed.
+  initialized = false;
+  total_hough_spaces_pos.setZero();
+  total_hough_spaces_neg.setZero();
+
   // Output file for the map data.
   if (FLAGS_map_output) {
     map_file.open(map_file_path);
@@ -321,10 +326,6 @@ void Detector::orientationCallback(const custom_msgs::orientationEstimate msg) {
 void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   const auto kStartTime = std::chrono::high_resolution_clock::now();
 
-  feature_msg_.header = msg->header;
-  feature_msg_.width = msg->width;
-  feature_msg_.height = msg->height;
-
   int num_events = msg->events.size();
   CHECK_GE(num_events, 1);
 
@@ -339,11 +340,11 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
 
   // Reshaping the event array into an Eigen matrix.
   Eigen::MatrixXf points;
+  //feature_msg_.events.clear();
   eventPreProcessing(msg, points);
 
   // Number of events after filtering and subsampling.
   num_events = feature_msg_.events.size();
-  CHECK_GE(num_events, 1);
 
   // Check there are enough events for our window size. This is only relevant
   // during initialization.
@@ -357,43 +358,31 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   radii.resize(kHoughAngularResolution, num_events);
   radii = (polar_param_mapping_ * points).cast<int>();
 
-  // Initializing total Hough spaces. Total means the Hough Space for a full
-  // current window, rather than the Hough Space of an individual event. It is
-  // therefore the sum of all the Hough Spaces of the events in the current
-  // window.
-  MatrixHough total_hough_spaces_pos;
-  MatrixHough total_hough_spaces_neg;
-
-  // At this point we are starting the parallelisation scheme of this
-  // pipeline. As events have to be processed sequentially, the sequence is
-  // split into parts. The beginning of each part depends on the end of the
-  // previous one. This beginning state is computed using a full HT and full
-  // NMS.
-
-  // Resetting the accumulator cells of all Hough spaces
-  total_hough_spaces_pos.setZero();
-  total_hough_spaces_neg.setZero();
-
-  // Computing total Hough space every at the beginning. This depends on the
-  // last FLAGS_hough_window_size of the previous batch.
-  computeFullHoughTransform(
-      total_hough_spaces_pos, total_hough_spaces_neg, radii);
-
   // Each event is treated as a timestep. For each of these timesteps we keep
   // the active set of maxima in the Hough Space. These are basically the line
   // detections at each timestep. This whole storage is pre-initialized to
   // make it ready for parallelizing the whole process.
   std::vector<std::vector<hough2map::Detector::line>> maxima_list(num_events);
 
-  // As we compute a full HT at the beginning of each batch, we also need a
-  // full NMS. This is computed here.
-  computeFullNMS(total_hough_spaces_pos, total_hough_spaces_neg, maxima_list);
+  // Initialize the total Hough space at the beginning and applying a full NMS.
+  if (!initialized) {
+    computeFullHoughTransform(
+        total_hough_spaces_pos, total_hough_spaces_neg, radii);
+    computeFullNMS(
+        total_hough_spaces_pos, total_hough_spaces_neg, maxima_list);
+    initialized = true;
+  } else {
+    maxima_list[FLAGS_hough_window_size - 1] = last_maxima;
+  }
 
   // Within each parallelised NMS batch, we can now perform the rest of the
   // computations iterativels, processing the events in their correct
   // sequence. This is done in parallel for all batches.
   itterativeNMS(
       total_hough_spaces_pos, total_hough_spaces_neg, maxima_list, radii);
+
+  // Store last set of maxima to have a starting point for the next message.
+  last_maxima = maxima_list[num_events - 1];
 
   // If visualizations are turned on display them in the video stream.
   if (FLAGS_show_lines_in_video) {
@@ -410,10 +399,7 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
     }
   }
 
-  // Publish events that were part of the Hough transform (because they were
-  // not filtered out).
-  feature_pub_.publish(feature_msg_);
-
+  // Calculate statistics
   if (num_events > 0) {
     std::chrono::duration<double, std::micro> duration_us =
         std::chrono::high_resolution_clock::now() - kStartTime;

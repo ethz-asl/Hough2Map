@@ -109,7 +109,6 @@ class Detector {
   // ROS interface.
   ros::NodeHandle nh_;
   ros::NodeHandle nh_private_;
-  ros::Publisher feature_pub_;
   ros::Subscriber event_sub_;
   ros::Subscriber image_raw_sub_;
 
@@ -199,6 +198,12 @@ class Detector {
       const std::vector<std::vector<hough2map::Detector::line>>&
           cur_maxima_list,
       const MatrixHough& hough_pos, const MatrixHough& hough_neg) const;
+
+  // For the very first message we need separate processing (e.g. a full HT).
+  bool initialized;
+  MatrixHough total_hough_spaces_pos;
+  MatrixHough total_hough_spaces_neg;
+  std::vector<hough2map::Detector::line> last_maxima;
 
   // Events from the previous dvs_msg need to be carried over to start of the
   // Hough computation of the next events. This basically ensures a continous
