@@ -5,14 +5,15 @@
   <!-- mapping pipeline -->
   <node name="hough2map" pkg="hough2map" type="hough2map" output="screen">
     <param name="rosbag_path" value="$(arg bag)"/>
-    <param name="hough_window_size" value="1000"/>
+    <param name="hough_window_size" value="500"/>
     <param name="hough_threshold" value="45"/>
     <param name="camera_offset_x" value="2.055"/>
     <param name="camera_offset_y" value="0.87"/>
     <param name="buffer_size_s" value="260"/>
     <param name="map_output" value="true"/>
-    <param name="show_lines_in_video" value="true"/>
+    <param name="show_lines_in_video" value="false"/>
     <param name="show_lines_every_nth" value="100"/>
+    <param name="hough_nms_radius" value="10"/>
     <param name="odometry_event_alignment" value="-0.314897455547225"/>
   </node>
 </launch>

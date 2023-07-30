@@ -34,9 +34,6 @@ DEFINE_double(camera_offset_x, 0, "Camera offset along the train axis");
 DEFINE_double(
     camera_offset_y, 0,
     "Camera offset perpendicular to the left of the train axis");
-DEFINE_bool(
-    perform_camera_undistortion, true,
-    "Undistort event data according to camera calibration");
 DEFINE_double(buffer_size_s, 30, "Size of the odometry buffer in seconds");
 
 namespace hough2map {
@@ -51,8 +48,6 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
 
   // Set initial status to false until first message is processed.
   initialized = false;
-  total_hough_spaces_pos.setZero();
-  total_hough_spaces_neg.setZero();
 
   // Output file for the map data.
   if (FLAGS_map_output) {
@@ -64,6 +59,9 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
       LOG(FATAL) << "Could not open file:" << map_file_path << std::endl;
     }
   }
+
+  debug_file.open(debug_file_path);
+  CHECK(debug_file.is_open());
 
   // Timing statistics for performance evaluation.
   total_events_timing_us = 0.0;
@@ -81,6 +79,7 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   initializeSinCosMap(
       thetas_, polar_param_mapping_, kHoughMinAngle, kHoughMaxAngle,
       kHoughAngularResolution);
+  hough_nms_radius2_ = FLAGS_hough_nms_radius * FLAGS_hough_nms_radius;
 
   // Initialize various transformation matrizes.
   initializeTransformationMatrices();
@@ -104,9 +103,8 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
         << "Visualization can be very slow, especially when using low values "
         << "for --show_lines_every_nth.";
 
-    cv::namedWindow("Detected poles", cv::WINDOW_NORMAL);
-    cv::namedWindow("Hough space (pos)", cv::WINDOW_NORMAL);
-
+    cv::namedWindow("Detected lines (pos)", cv::WINDOW_NORMAL);
+    cv::namedWindow("Detected lines (neg)", cv::WINDOW_NORMAL);
     topics.emplace_back(FLAGS_image_topic);
   }
 
@@ -323,81 +321,89 @@ void Detector::orientationCallback(const custom_msgs::orientationEstimate msg) {
   }
 }
 
+void Detector::stepHoughTransform(
+      const Eigen::MatrixXf& points, Detector::MatrixHough& hough_space,
+      std::vector<hough2map::Detector::line> *last_maxima, bool initialized,
+      std::vector<std::vector<hough2map::Detector::line>> *maxima_list) {
+  CHECK_NOTNULL(last_maxima);
+  CHECK_NOTNULL(maxima_list);
+
+  const int num_events = points.cols();
+
+  // Pre-compute all the radii for each theta hypothesis. This parameter
+  // represents one axis of the Hough space.
+  Eigen::MatrixXi radii;
+  radii.resize(kHoughAngularResolution, num_events);
+  radii = (polar_param_mapping_ * points).cast<int>();
+
+  // Pre-allocate space for all the maxima at each timestep.
+  maxima_list->resize(num_events);
+
+  const size_t start_index = FLAGS_hough_window_size - 1;
+  if (!initialized) {
+    hough_space.setZero();
+    computeFullHoughSpace(start_index, hough_space, radii);
+    computeFullNMS(hough_space, maxima_list->data() + start_index);
+  } else {
+    (*maxima_list)[start_index] = *last_maxima;
+  }
+
+  // Perform computations iteratively for the rest of the events.
+  itterativeNMS(points, hough_space, radii, maxima_list);
+
+  // Store last set of maxima to have a starting point for the next message.
+  *last_maxima = (*maxima_list)[num_events - 1];
+}
+
 void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   const auto kStartTime = std::chrono::high_resolution_clock::now();
 
   int num_events = msg->events.size();
   CHECK_GE(num_events, 1);
 
-  // If initialized then make sure the last FLAGS_hough_window_size events
-  // are prepended to the current list of events and remove older events.
-  if (feature_msg_.events.size() > FLAGS_hough_window_size) {
-    std::copy(
-        feature_msg_.events.end() - FLAGS_hough_window_size,
-        feature_msg_.events.end(), feature_msg_.events.begin());
-    feature_msg_.events.resize(FLAGS_hough_window_size);
-  }
-
   // Reshaping the event array into an Eigen matrix.
-  Eigen::MatrixXf points;
-  //feature_msg_.events.clear();
-  eventPreProcessing(msg, points);
+  Eigen::MatrixXf points_pos;
+  Eigen::MatrixXf points_neg;
+  eventPreProcessing(msg, points_pos, points_neg);
 
-  // Number of events after filtering and subsampling.
-  num_events = feature_msg_.events.size();
+  // The new points will now be the next old points.
+  const int num_points_pos = points_pos.cols();
+  const int num_points_neg = points_neg.cols();
+  const int keep_pos = std::min(FLAGS_hough_window_size, num_points_pos);
+  const int keep_neg = std::min(FLAGS_hough_window_size, num_points_neg);
+  last_points_pos = points_pos.block(0, num_points_pos - keep_pos, 2, keep_pos);
+  last_points_neg = points_neg.block(0, num_points_neg - keep_neg, 2, keep_neg);
 
-  // Check there are enough events for our window size. This is only relevant
-  // during initialization.
-  if (num_events <= FLAGS_hough_window_size) {
+  // Wait until we have enough points to initialize.
+  if (num_points_pos < FLAGS_hough_window_size ||
+      num_points_neg < FLAGS_hough_window_size) {
     return;
   }
-
-  // Computing all the radii for each theta hypothesis. This parameter pair
-  // forms the Hough space. This is done all at once for each event.
-  Eigen::MatrixXi radii;
-  radii.resize(kHoughAngularResolution, num_events);
-  radii = (polar_param_mapping_ * points).cast<int>();
 
   // Each event is treated as a timestep. For each of these timesteps we keep
   // the active set of maxima in the Hough Space. These are basically the line
   // detections at each timestep. This whole storage is pre-initialized to
   // make it ready for parallelizing the whole process.
-  std::vector<std::vector<hough2map::Detector::line>> maxima_list(num_events);
+  std::vector<std::vector<Detector::line>> maxima_list_pos(num_points_pos);
+  std::vector<std::vector<Detector::line>> maxima_list_neg(num_points_neg);
 
-  // Initialize the total Hough space at the beginning and applying a full NMS.
-  if (!initialized) {
-    computeFullHoughTransform(
-        total_hough_spaces_pos, total_hough_spaces_neg, radii);
-    computeFullNMS(
-        total_hough_spaces_pos, total_hough_spaces_neg, maxima_list);
-    initialized = true;
-  } else {
-    maxima_list[FLAGS_hough_window_size - 1] = last_maxima;
-  }
+  stepHoughTransform(
+      points_pos, hough_space_pos, &last_maxima_pos, initialized,
+      &maxima_list_pos);
+  stepHoughTransform(
+      points_neg, hough_space_neg, &last_maxima_neg, initialized,
+      &maxima_list_neg);
 
-  // Within each parallelised NMS batch, we can now perform the rest of the
-  // computations iterativels, processing the events in their correct
-  // sequence. This is done in parallel for all batches.
-  itterativeNMS(
-      total_hough_spaces_pos, total_hough_spaces_neg, maxima_list, radii);
+  initialized = true;
 
-  // Store last set of maxima to have a starting point for the next message.
-  last_maxima = maxima_list[num_events - 1];
-
-  // If visualizations are turned on display them in the video stream.
-  if (FLAGS_show_lines_in_video) {
-    visualizeCurrentLineDetections(
-        points, maxima_list, total_hough_spaces_pos, total_hough_spaces_neg);
-  }
-
-  if (FLAGS_map_output) {
+  /*if (FLAGS_map_output) {
     for (const auto& maximas : maxima_list) {
       for (const Detector::line& maxima : maximas) {
         map_file << maxima.time << "," << maxima.r << "," << maxima.theta
                  << std::endl;
       }
     }
-  }
+  }*/
 
   // Calculate statistics
   if (num_events > 0) {
@@ -416,44 +422,51 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
               << std::setw(6) << total_msgs_timing_ms / total_msgs
               << " ms/msg | " << std::setw(6) << num_events << " e/msg";
   }
+
+  // If visualizations are turned on display them in the video stream.
+  // NOTE: This slows everything down by a very large margin
+  if (FLAGS_show_lines_in_video) {
+    visualizeCurrentLineDetections(
+        true, points_pos, maxima_list_pos, hough_space_pos);
+    visualizeCurrentLineDetections(
+        false, points_neg, maxima_list_neg, hough_space_neg);
+  }
 }
 
-// Visualizing the current line detections of the first Hough Transform.
-// This function only visualizes vertical lines, for other orientations it needs
-// to be adjusted.
+// Visualizing the current line detections and corresponding Hough space.
 void Detector::visualizeCurrentLineDetections(
-    const Eigen::MatrixXf& points, 
-    const std::vector<std::vector<hough2map::Detector::line>>& cur_maxima_list,
-    const MatrixHough& hough_pos, const MatrixHough& hough_neg) const {
-  int num_events = feature_msg_.events.size();
+    bool polarity, const Eigen::MatrixXf& points, 
+    const std::vector<std::vector<hough2map::Detector::line>>& maxima_list,
+    const Detector::MatrixHough& hough_space) const {
+  const int num_events = points.cols();
+
+  // Predefined colors and strings
+  const cv::Scalar color_scalar = 
+      polarity ? cv::Scalar(0, 0, 255) : cv::Scalar(255, 0, 0);
+  const cv::Vec3b color_vec3b = 
+      polarity ? cv::Vec3b(0, 0, 255) : cv::Vec3b(255, 0, 0);
+  const std::string cv_window =
+      polarity ? "Detected lines (pos)" : "Detected lines (neg)";
 
   // Getting the horizontal positions of all vertical line detections.
   size_t step_size = FLAGS_show_lines_every_nth;
-  for (size_t i = FLAGS_hough_window_size - 1; i < num_events; i += step_size) {
+  for (size_t i = FLAGS_hough_window_size; i < num_events; i += step_size) {
     cv::Mat vis_frame;
     cv::remap(
-        cur_greyscale_img_, vis_frame, image_undist_map_x_, image_undist_map_y_,
-        cv::INTER_LINEAR);
+        cur_greyscale_img_, vis_frame, image_undist_map_x_,
+        image_undist_map_y_, cv::INTER_LINEAR);
 
     for (size_t j = i - FLAGS_hough_window_size + 1; j <= i; j++) {
-      const dvs_msgs::Event& event = feature_msg_.events[j];
       uint32_t x = static_cast<uint32_t>(points(0, j));
       uint32_t y = static_cast<uint32_t>(points(1, j));
-      vis_frame.at<cv::Vec3b>(y, x) =
-          event.polarity ? cv::Vec3b(0, 0, 255) : cv::Vec3b(255, 0, 0);
+      vis_frame.at<cv::Vec3b>(y, x) = color_vec3b;
     }
 
-    for (auto& maxima : cur_maxima_list[i]) {
-      if (maxima.polarity) {
-        drawPolarCorLine(
-          vis_frame, maxima.r, maxima.theta, cv::Scalar(0, 0, 255)); 
-      } else {
-        drawPolarCorLine(
-          vis_frame, maxima.r, maxima.theta, cv::Scalar(255, 0, 0)); 
-      }
+    for (auto& maxima : maxima_list[i]) {
+      drawPolarCorLine(vis_frame, maxima.r, maxima.theta, color_scalar); 
     }
 
-    cv::imshow("Detected poles", vis_frame);
+    cv::imshow(cv_window, vis_frame);
     cv::waitKey(1);
   }
 }
@@ -461,49 +474,36 @@ void Detector::visualizeCurrentLineDetections(
 // Performing itterative Non-Maximum suppression on the current batch of
 // events based on a beginning Hough Space.
 void Detector::itterativeNMS(
-    MatrixHough& total_hough_space_pos, MatrixHough& total_hough_space_neg,
-    std::vector<std::vector<hough2map::Detector::line>>& cur_maxima_list,
-    const Eigen::MatrixXi& radii) {
+    const Eigen::MatrixXf& points, MatrixHough& hough_space, 
+    const Eigen::MatrixXi& radii,
+    std::vector<std::vector<Detector::line>>* maxima_list) {
   std::vector<hough2map::Detector::line> new_maxima;
   std::vector<int> new_maxima_value;
-  int num_events = feature_msg_.events.size();
+  const int num_events = points.cols();
 
-  /* Iterative Hough transform */
-
-  // Itterating over all events which are part of this current batch. These
-  // will be added and removed through the iteration process.
-  const int left = FLAGS_hough_window_size;
-  const int right = num_events;
-  CHECK_GE(right, left);
-
-  for (int l = left; l < right; l++) {
-    // Getting the event that gets added right now.
-    const dvs_msgs::Event& event = feature_msg_.events[l];
-    const double kTimestamp = event.ts.toSec();
-    CHECK_GE(l - 1, 0);
-
+  for (int event = FLAGS_hough_window_size; event < num_events; event++) {
     // Establishing the lists of maxima for this timestep and the ones of the
     // previous timestep
-    std::vector<hough2map::Detector::line>& current_maxima = cur_maxima_list[l];
-    std::vector<hough2map::Detector::line>& previous_maxima =
-        cur_maxima_list[l - 1];
+    std::vector<hough2map::Detector::line> &current_maxima =
+        (*maxima_list)[event];
+    std::vector<hough2map::Detector::line> &previous_maxima =
+        (*maxima_list)[event - 1];
 
     // Incrementing the accumulator cells for the current event.
-    updateHoughSpaceVotes(
-        true, l, event.polarity, radii, total_hough_space_pos,
-        total_hough_space_neg);
-
-    // Find the oldest event in the current window and get ready to remove it.
-    const int kLRemove = l - FLAGS_hough_window_size;
-    CHECK_GE(l - FLAGS_hough_window_size, 0);
-    const dvs_msgs::Event& event_remove = feature_msg_.events[kLRemove];
+    for (int angle = 0; angle < kHoughAngularResolution; angle++) {
+      const int radius = radii(angle, event);
+      if (radius >= 0 && radius < kHoughRadiusResolution) {
+        hough_space(radius, angle)++;
+      }
+    }
 
     // Decrement the accumulator cells for the event to be removed.
-    updateHoughSpaceVotes(
-        false, kLRemove, event_remove.polarity, radii, total_hough_space_pos,
-        total_hough_space_neg);
-
-    /* Iterative non-maxima suppression */
+    for (int angle = 0; angle < kHoughAngularResolution; angle++) {
+      const int radius = radii(angle, event - FLAGS_hough_window_size);
+      if (radius >= 0 && radius < kHoughRadiusResolution) {
+        hough_space(radius, angle)--;
+      }
+    }
 
     // The Hough Spaces have been update. Now the iterative NMS has to run and
     // update the list of known maxima. First reset the temporary lists.
@@ -514,54 +514,130 @@ void Detector::itterativeNMS(
     // we don't need to check again at the end.
     std::vector<int> discard(previous_maxima.size(), 0);
 
-    /* Phase 1 - Obtain candidates for global maxima */
+    // PHASE 1 - Obtain candidates for global maxima
 
     // For points that got incremented.
-    for (int i = 0; i < kHoughAngularResolution; ++i) {
-      const int kRadius = radii(i, l);
+    for (int angle = 0; angle < kHoughAngularResolution; ++angle) {
+      const int radius = radii(angle, event);
+      if ((radius < 0) || (radius >= kHoughRadiusResolution)) {
+        continue;
+      }
 
-      if ((kRadius >= 0) && (kRadius < kHoughRadiusResolution)) {
-        if (event.polarity) {
-          bool skip_center = false;
-          updateIncrementedNMS(
-              kTimestamp, event.polarity, i, kRadius, total_hough_space_pos,
-              previous_maxima, discard, new_maxima, new_maxima_value);
-          // The center and a neighbour have the same value so
-          // no point in checking if it is a local maximum.
-          if (skip_center) {
+      // If any of the surrounding ones are equal the center
+      // for sure it is not a local maximum.
+      bool skip_center = false;
+
+      // Iterate over neighbourhood to check if we might have
+      // supressed a surrounding maximum by growing.
+      const int m_l = std::max(angle - 1, 0);
+      const int m_r = std::min(angle + 1, kHoughAngularResolution - 1);
+      const int n_l = std::max(radius - 1, 0);
+      const int n_r = std::min(radius + 1, kHoughRadiusResolution - 1);
+      for (int m = m_l; m <= m_r; ++m) {
+        for (int n = n_l; n <= n_r; ++n) {
+          // The center is a separate case.
+          if ((m == angle) && (n == radius)) {
             continue;
           }
 
-        } else {
-          bool skip_center = false;
-          updateIncrementedNMS(
-              kTimestamp, event.polarity, i, kRadius, total_hough_space_neg,
-              previous_maxima, discard, new_maxima, new_maxima_value);
-          // The center and a neighbour have the same value so
-          // no point in checking if it is a local maximum.
-          if (skip_center) {
-            continue;
+          // Compare point to its neighbors.
+          if (hough_space(radius, angle) == hough_space(n, m)) {
+            skip_center = true;
+            // Compare to all known maxima from the previous timestep.
+            for (size_t i = 0; i < previous_maxima.size(); ++i) {
+              if ((n == previous_maxima[i].r) &&
+                  (m == previous_maxima[i].theta_idx)) {
+                // We need to discard an old maximum.
+                discard[i] = true;
+
+                // And add a new one.
+                addMaximaInRadius(
+                    m, n, hough_space, &new_maxima, &new_maxima_value);
+                break;
+              }
+            }
           }
+        }
+      }
+
+      // The center and a neighbour have the same value so
+      // no point in checking if it is a local maximum.
+      if (skip_center) {
+        continue;
+      }
+
+      // This is the case for the center point. First checking if it's currently
+      // a maximum.
+      if ((hough_space(radius, angle) > FLAGS_hough_threshold) &&
+          isLocalMaxima(hough_space, angle, radius)) {
+        bool add_maximum = true;
+        // Check if it was a maximum previously.
+        for (const auto& maximum : previous_maxima) {
+          if ((radius == maximum.r) && (angle == maximum.theta_idx)) {
+            add_maximum = false;
+            break;
+          }
+        }
+
+        // If required, add it to the list.
+        if (add_maximum) {
+          new_maxima.emplace_back(radius, thetas_(angle), angle);
+          new_maxima_value.emplace_back(hough_space(radius, angle));
         }
       }
     }
 
     // For accumulator cells that got decremented.
-    for (int i = 0; i < kHoughAngularResolution; i++) {
-      const int kRadius = radii(i, kLRemove);
+    for (int angle = 0; angle < kHoughAngularResolution; ++angle) {
+      const int radius = radii(angle, event - FLAGS_hough_window_size);
+      if ((radius < 0) || (radius >= kHoughRadiusResolution)) {
+        continue;
+      }
 
-      if ((kRadius >= 0) && (kRadius < kHoughRadiusResolution)) {
-        if (event_remove.polarity) {
-          updateDecrementedNMS(
-              kTimestamp, event_remove.polarity, i, kRadius,
-              total_hough_space_pos, previous_maxima, discard, new_maxima,
-              new_maxima_value);
+      // If decremented accumulator cell was previously a maximum, remove it.
+      // If it's still a maximum, we will deal with it later.
+      bool skip_neighborhood = false;
+      for (size_t k = 0; k < previous_maxima.size(); ++k) {
+        if ((radius == previous_maxima[k].r) &&
+            (angle == previous_maxima[k].theta_idx)) {
+          // Mark as discarded since we will already have added it
+          // in the next step if it still is above the threshold.
+          discard[k] = true;
 
-        } else {
-          updateDecrementedNMS(
-              kTimestamp, event_remove.polarity, i, kRadius,
-              total_hough_space_neg, previous_maxima, discard, new_maxima,
-              new_maxima_value);
+          // Re-add to list of possible maxima for later pruning.
+          addMaximaInRadius(
+              angle, radius, hough_space, &new_maxima, &new_maxima_value);
+
+          // The neighborhood of this accumulator cell has been checked as part of
+          // addMaximaInRadius, so no need to do it again.
+          skip_neighborhood = true;
+          break;
+        }
+      }
+
+      if (!skip_neighborhood) {
+        // Iterate over neighbourhood to check if we might have
+        // created a new local maxima by decreasing.
+        const int m_l = std::max(angle - 1, 0);
+        const int m_r = std::min(angle + 1, kHoughAngularResolution - 1);
+        const int n_l = std::max(radius - 1, 0);
+        const int n_r = std::min(radius + 1, kHoughRadiusResolution - 1);
+        for (int m = m_l; m <= m_r; m++) {
+          for (int n = n_l; n <= n_r; n++) {
+            // The center is a separate case.
+            if ((m == angle) && (n == radius)) {
+              continue;
+            }
+
+            // Any neighbor points now larger and a maximum?
+            if ((hough_space(radius, angle) + 1 == hough_space(n, m)) &&
+                (hough_space(n, m) > FLAGS_hough_threshold) &&
+                isLocalMaxima(hough_space, m, n)) {
+              // Add to temporary storage.
+              new_maxima.emplace_back(n, thetas_(m), m);
+              new_maxima_value.emplace_back(hough_space(n, m));
+            }
+          }
         }
       }
     }
@@ -571,7 +647,7 @@ void Detector::itterativeNMS(
       // expired ones and keep the rest as it was unchanged.
       for (int i = 0; i < previous_maxima.size(); i++) {
         if (!discard[i]) {
-          current_maxima.push_back(previous_maxima[i]);
+          current_maxima.emplace_back(previous_maxima[i]);
         }
       }
     } else {
@@ -579,21 +655,13 @@ void Detector::itterativeNMS(
       // valid to the temporary list of new maxima.
       for (int i = 0; i < previous_maxima.size(); i++) {
         if (!discard[i]) {
-          const hough2map::Detector::line& kMaximum = previous_maxima[i];
-
-          new_maxima.push_back(kMaximum);
-
-          if (kMaximum.polarity) {
-            new_maxima_value.push_back(
-                total_hough_space_pos(kMaximum.r, kMaximum.theta_idx));
-          } else {
-            new_maxima_value.push_back(
-                total_hough_space_neg(kMaximum.r, kMaximum.theta_idx));
-          }
+          new_maxima.emplace_back(previous_maxima[i]);
+          new_maxima_value.emplace_back(hough_space(
+              previous_maxima[i].r, previous_maxima[i].theta_idx));
         }
       }
 
-      /* Phase 2 - Detect and apply suppression */
+      // PHASE 2 - Detect and apply suppression
 
       // Apply the suppression radius.
       applySuppressionRadius(new_maxima, new_maxima_value, &current_maxima);
@@ -605,15 +673,11 @@ void Detector::itterativeNMS(
         const int kNumMaximaCandidates = new_maxima.size();
         for (int i = 0; i < previous_maxima.size(); i++) {
           if (!discard[i]) {
-            const hough2map::Detector::line& kPreviousMaximum =
-                previous_maxima[i];
-
             bool found = false;
             for (const hough2map::Detector::line& current_maximum :
                  current_maxima) {
-              if ((current_maximum.polarity == kPreviousMaximum.polarity) &&
-                  (current_maximum.r == kPreviousMaximum.r) &&
-                  (current_maximum.theta_idx == kPreviousMaximum.theta_idx)) {
+              if ((current_maximum.r == previous_maxima[i].r) &&
+                  (current_maximum.theta_idx == previous_maxima[i].theta_idx)) {
                 found = true;
                 break;
               }
@@ -621,18 +685,9 @@ void Detector::itterativeNMS(
 
             if (!found) {
               discard[i] = true;
-
-              if (kPreviousMaximum.polarity) {
-                addMaximaInRadius(
-                    kPreviousMaximum.theta_idx, kPreviousMaximum.r,
-                    total_hough_space_pos, FLAGS_hough_threshold, true,
-                    kTimestamp, &new_maxima, &new_maxima_value, true);
-              } else {
-                addMaximaInRadius(
-                    kPreviousMaximum.theta_idx, kPreviousMaximum.r,
-                    total_hough_space_neg, FLAGS_hough_threshold, false,
-                    kTimestamp, &new_maxima, &new_maxima_value, true);
-              }
+              addMaximaInRadius(
+                  previous_maxima[i].theta_idx, previous_maxima[i].r,
+                  hough_space, &new_maxima, &new_maxima_value, true);
             }
           }
         }
@@ -644,232 +699,106 @@ void Detector::itterativeNMS(
         }
       }
     }
-  }
-}
 
-// Updating the iterative Non-Maximum suppression for decremented events.
-void Detector::updateDecrementedNMS(
-    const double kTimestamp, const bool polarity, const int kAngle,
-    const int kRadius, const MatrixHough& hough_space,
-    const std::vector<hough2map::Detector::line>& previous_maxima,
-    std::vector<int>& discard,
-    std::vector<hough2map::Detector::line>& new_maxima,
-    std::vector<int>& new_maxima_value) {
-  // If decremented accumulator cell was previously a maximum, remove it. If
-  // it's still a maximum, we will deal with it later.
-  int k = 0;
-  bool skip_neighborhood = false;
-  for (const hough2map::Detector::line& maximum : previous_maxima) {
-    if ((maximum.polarity == polarity) && (kRadius == maximum.r) &&
-        (kAngle == maximum.theta_idx)) {
-      // Mark as discarded since we will added already
-      // in the next step if it still is above the threshold.
-      discard[k] = true;
+    // DEBUG
+    /*{
+      MatrixHough hough_space_debug;
+      std::vector<Detector::line> maxima_debug;
 
-      // Re-add to list of possible maxima for later pruning.
-      addMaximaInRadius(
-          kAngle, kRadius, hough_space, FLAGS_hough_threshold, polarity,
-          kTimestamp, &new_maxima, &new_maxima_value);
+      hough_space_debug.setZero();
+      computeFullHoughSpace(event, hough_space_debug, radii);
+      computeFullNMS(hough_space_debug, &maxima_debug);
 
-      // The neighborhood of this accumulator cell has been checked as part of
-      // addMaximaInRadius, so no need to do it again.
-      skip_neighborhood = true;
-      break;
-    }
-
-    k++;
-  }
-
-  if (!skip_neighborhood) {
-    // Iterate over neighbourhood to check if we might have
-    // created a new local maxima by decreasing.
-    const int m_l = std::max(kAngle - 1, 0);
-    const int m_r = std::min(kAngle + 1, kHoughAngularResolution - 1);
-    const int n_l = std::max(kRadius - 1, 0);
-    const int n_r = std::min(kRadius + 1, kHoughRadiusResolution - 1);
-    for (int m = m_l; m <= m_r; m++) {
-      for (int n = n_l; n <= n_r; n++) {
-        // The center is a separate case.
-        if ((m == kAngle) && (n == kRadius)) {
-          continue;
-        }
-
-        // Any neighbor points now larger and a maximum?
-        if ((hough_space(kRadius, kAngle) + 1 == hough_space(n, m)) &&
-            (hough_space(n, m) > FLAGS_hough_threshold) &&
-            isLocalMaxima(hough_space, m, n)) {
-          // Add to temporary storage.
-          new_maxima.push_back(addMaxima(m, n, kTimestamp, polarity));
-          new_maxima_value.push_back(hough_space(n, m));
-        }
-      }
-    }
-  }
-}
-
-// Updating the iterative Non-Maximum suppression for incrementing events.
-bool Detector::updateIncrementedNMS(
-    const double kTimestamp, const bool polarity, const int kAngle,
-    const int kRadius, const MatrixHough& hough_space,
-    const std::vector<hough2map::Detector::line>& previous_maxima,
-    std::vector<int>& discard,
-    std::vector<hough2map::Detector::line>& new_maxima,
-    std::vector<int>& new_maxima_value) {
-  // If any of the surrounding ones are equal the center
-  // for sure is not a local maximum.
-  bool skip_center = false;
-
-  // Iterate over neighbourhood to check if we might have
-  // supressed a surrounding maximum by growing.
-  const int m_l = std::max(kAngle - 1, 0);
-  const int m_r = std::min(kAngle + 1, kHoughAngularResolution - 1);
-  const int n_l = std::max(kRadius - 1, 0);
-  const int n_r = std::min(kRadius + 1, kHoughRadiusResolution - 1);
-  for (int m = m_l; m <= m_r; m++) {
-    for (int n = n_l; n <= n_r; n++) {
-      // The center is a separate case.
-      if ((m == kAngle) && (n == kRadius)) {
-        continue;
-      }
-
-      // Compare point to its neighbors.
-      if (hough_space(kRadius, kAngle) == hough_space(n, m)) {
-        skip_center = true;
-        // Compare to all known maxima from the previous timestep.
-        int k = 0;
-        for (const hough2map::Detector::line& maximum : previous_maxima) {
-          if ((maximum.polarity == polarity) && (n == maximum.r) &&
-              (m == maximum.theta_idx)) {
-            // We need to discard an old maximum.
-            discard[k] = true;
-
-            // And add a new one.
-            addMaximaInRadius(
-                m, n, hough_space, FLAGS_hough_threshold, polarity, kTimestamp,
-                &new_maxima, &new_maxima_value);
-            break;
+      bool different = false;
+      if (maxima_debug.size() == current_maxima.size()) {
+        for (size_t i = 0; i < maxima_debug.size(); ++i) {
+          // The ordering might not always be preserved, but
+          // we care about the content so we search exhaustively.
+          bool found = false;
+          for (size_t j = 0; j < current_maxima.size(); ++j){
+            if (maxima_debug[i] == current_maxima[j]) {
+              found = true;
+              break;
+            }
           }
 
-          k++;
+          if (!found) {
+            different = true;
+            break;
+          }
         }
+      } else {
+        different = true;
       }
-    }
-  }
 
-  // The center and a neighbour have the same value so
-  // no point in checking if it is a local maximum.
-  if (skip_center) {
-    return true;
-  }
+      if (different) {
+        LOG(INFO) << "==================== " << event;
+        for (size_t j = 0; j < maxima_debug.size(); ++j) {
+          LOG(INFO) << "d: " << maxima_debug[j].r << " "
+              << maxima_debug[j].theta_idx;
+        }
+        for (size_t j = 0; j < current_maxima.size(); ++j) {
+          LOG(INFO) << "i: " << current_maxima[j].r << " "
+              << current_maxima[j].theta_idx;
+        }
 
-  // This is the case for the center point. First checking if it's currently a
-  // maximum.
-  if ((hough_space(kRadius, kAngle) > FLAGS_hough_threshold) &&
-      isLocalMaxima(hough_space, kAngle, kRadius)) {
-    bool add_maximum = true;
-    // Check if it was a maximum previously.
-    for (const auto& maximum : previous_maxima) {
-      if ((maximum.polarity == polarity) && (kRadius == maximum.r) &&
-          (kAngle == maximum.theta_idx)) {
-        add_maximum = false;
-        break;
+        for (int i = 0; i < hough_space.rows(); ++i) {
+          std::stringstream row;
+          row << std::setw(3) << i << ": ";
+          for (int j = 0; j < hough_space.cols(); ++j) {
+            row << std::setw(2) << hough_space(i, j) << ", ";
+          }
+          LOG(INFO) << row.str();
+        }
+
+        exit(0);
       }
-    }
-
-    // If required, add it to the list.
-    if (add_maximum) {
-      new_maxima.push_back(addMaxima(kAngle, kRadius, kTimestamp, polarity));
-      new_maxima_value.push_back(hough_space(kRadius, kAngle));
-    }
+    }*/
   }
-  return false;
 }
 
 // Computing a full Non-Maximum Suppression for a given current Hough Space.
 void Detector::computeFullNMS(
-    const MatrixHough& total_hough_space_pos,
-    const MatrixHough& total_hough_space_neg,
-    std::vector<std::vector<hough2map::Detector::line>>& cur_maxima_list) {
-  // Index of the current event in the frame of all events of the current
-  // message with carry-over from previous message.
-  const int kNmsIndex = FLAGS_hough_window_size - 1;
-  std::vector<hough2map::Detector::line>& current_maxima =
-      cur_maxima_list[kNmsIndex];
+    const MatrixHough& hough_space, std::vector<Detector::line> *maxima) {
+  CHECK_NOTNULL(maxima);
 
   // New detected maxima and their value.
-  std::vector<hough2map::Detector::line> new_maxima;
-  std::vector<int> new_maxima_value;
+  std::vector<hough2map::Detector::line> candidate_maxima;
+  std::vector<int> candidate_maxima_value;
 
   // Checking every angle and radius hypothesis.
   for (int i = 0; i < kHoughAngularResolution; i++) {
     for (int j = 0; j < kHoughRadiusResolution; j++) {
-      // Get the current events for a current time stamp.
-      const dvs_msgs::Event& event = feature_msg_.events[kNmsIndex];
-
-      // Checking positive Hough space, whether it is larger than threshold
-      // and larger than neighbors.
-      if (total_hough_space_pos(j, i) > FLAGS_hough_threshold) {
-        if (isLocalMaxima(total_hough_space_pos, i, j)) {
+      // Check in the Hough space, whether this hypothesis is larger than the
+      // threshold and larger than its neighbors.
+      if (hough_space(j, i) > FLAGS_hough_threshold) {
+        if (isLocalMaxima(hough_space, i, j)) {
           // Add as a possible maximum to the list.
-          new_maxima.push_back(addMaxima(i, j, event.ts.toSec(), true));
-          new_maxima_value.push_back(total_hough_space_pos(j, i));
-        }
-      }
-
-      // Checking positive Hough space, whether it is larger than threshold
-      // and larger than neighbors.
-      if (total_hough_space_neg(j, i) > FLAGS_hough_threshold) {
-        if (isLocalMaxima(total_hough_space_neg, i, j)) {
-          // Add as a possible maximum to the list.
-          new_maxima.push_back(addMaxima(i, j, event.ts.toSec(), false));
-          new_maxima_value.push_back(total_hough_space_neg(j, i));
+          candidate_maxima.emplace_back(j, thetas_(i), i);
+          candidate_maxima_value.emplace_back(hough_space(j, i));
         }
       }
     }
   }
+
   // This applies a suppression radius to the list of maxima hypothesis, to
   // only get the most prominent ones.
-  applySuppressionRadius(new_maxima, new_maxima_value, &current_maxima);
+  applySuppressionRadius(candidate_maxima, candidate_maxima_value, maxima);
 }
 
 // Computing a full Hough Space based on a current set of events and their
 // respective Hough parameters.
-void Detector::computeFullHoughTransform(
-    MatrixHough& total_hough_space_pos, MatrixHough& total_hough_space_neg,
-    const Eigen::MatrixXi& radii) {
+void Detector::computeFullHoughSpace(
+    size_t index, MatrixHough& hough_space, const Eigen::MatrixXi& radii) {
+  CHECK_GE(index, FLAGS_hough_window_size - 1);
+
   // Looping over all events that have an influence on the current total
   // Hough space (i.e. fall in the detection window).
-  for (int j = 0; j < FLAGS_hough_window_size; j++) {
-    updateHoughSpaceVotes(
-        true, j, feature_msg_.events[j].polarity, radii, total_hough_space_pos,
-        total_hough_space_neg);
-  }
-}
-
-// Incrementing a HoughSpace for a certain event.
-void Detector::updateHoughSpaceVotes(
-    const bool increment, const int event_idx, const bool pol,
-    const Eigen::MatrixXi& radii, MatrixHough& hough_space_pos,
-    MatrixHough& hough_space_neg) {
-  // Looping over all confirmed hypothesis and adding or removing them from the
-  // Hough space.
-  for (int k = 0; k < kHoughAngularResolution; k++) {
-    const int kRadius = radii(k, event_idx);
-    // making sure the parameter set is within the domain of the HS.
-    if ((kRadius >= 0) && (kRadius < kHoughRadiusResolution)) {
-      // Incrementing or decrement the respective accumulator cells.
-      if (pol) {
-        if (increment) {
-          hough_space_pos(kRadius, k)++;
-        } else {
-          hough_space_pos(kRadius, k)--;
-        }
-      } else {
-        if (increment) {
-          hough_space_neg(kRadius, k)++;
-        } else {
-          hough_space_neg(kRadius, k)--;
-        }
+  for (int i = index - FLAGS_hough_window_size + 1; i <= index; i++) {
+    for (int j = 0; j < kHoughAngularResolution; j++) {
+      const int radius = radii(j, i);
+      if (radius >= 0 && radius < kHoughRadiusResolution) {
+        hough_space(radius, j)++;
       }
     }
   }
@@ -877,60 +806,55 @@ void Detector::updateHoughSpaceVotes(
 
 // Event preprocessing prior to first HT.
 void Detector::eventPreProcessing(
-    const dvs_msgs::EventArray::ConstPtr& orig_msg, Eigen::MatrixXf& points) {
-  int num_events = orig_msg->events.size();
-  // Filtering for dead pixels and subsampling the leftover events.
-  //
-  // TODO: Could be parallelized by splitting into two steps, one that counts
-  // second one that does the actual shuffle in memory, if done correctly
-  // with some caching overhead would be very small.
-  //
-  // Also would be faster to just preallocate the eigen matrix to max
-  // size and write directly into it and afterwards resize.
+    const dvs_msgs::EventArray::ConstPtr& orig_msg,
+    Eigen::MatrixXf& points_pos, Eigen::MatrixXf& points_neg) {
+  const int num_events = orig_msg->events.size();
+
+  // How many points do we carry over from previous messages.
+  const int num_last_points_pos = last_points_pos.cols();
+  const int num_last_points_neg = last_points_neg.cols();
+
+  // Preallocate more space than needed.
+  points_pos.resize(2, num_events + num_last_points_pos);
+  points_neg.resize(2, num_events + num_last_points_neg);
+
+  // Concatenate previous points with the new ones.
+  points_pos.block(0, 0, 2, num_last_points_pos) = last_points_pos;
+  points_neg.block(0, 0, 2, num_last_points_neg) = last_points_neg;
+
+  // Preprocess events and potentially subsample.
+  int count_pos = num_last_points_pos;
+  int count_neg = num_last_points_neg;
   for (int i = 0; i < num_events; i += FLAGS_event_subsample_factor) {
     const dvs_msgs::Event& e = orig_msg->events[i];
 
     // Seemingly broken pixels in the DVS (millions of exactly equal events at
     // once at random). This needs to be adapted if you use another device.
-    if (((e.x != 19) || (e.y != 18)) && ((e.x != 43) || (e.y != 72)) &&
-        ((e.x != 89) || (e.y != 52)) && ((e.x != 25) || (e.y != 42)) &&
-        ((e.x != 61) || (e.y != 71)) && ((e.x != 37) || (e.y != 112))) {
-      feature_msg_.events.push_back(e);
+    if (((e.x == 19) && (e.y == 18)) || ((e.x == 43) && (e.y == 72)) ||
+        ((e.x == 89) && (e.y == 52)) || ((e.x == 25) && (e.y == 42)) ||
+        ((e.x == 61) && (e.y == 71)) || ((e.x == 37) && (e.y == 112))) {
+      continue;
+    }
+
+    // Undistort events based on camera calibration.
+    float x = event_undist_map_x_(e.y, e.x);
+    float y = event_undist_map_y_(e.y, e.x);
+
+    // Sort by polarity as we calculate two separate HTs, since lines are
+    // usually one homogeneous transition in intensity across.
+    if (e.polarity) {
+      points_pos(0, count_pos) = x;
+      points_pos(1, count_pos) = y;
+      count_pos++;
+    } else {
+      points_neg(0, count_neg) = x;
+      points_neg(1, count_neg) = y;
+      count_neg++;
     }
   }
 
-  // Number of events after filtering and subsampling.
-  num_events = feature_msg_.events.size();
-
-  // Check there are enough events for our window size. This is only relevant
-  // during initialization.
-  if (num_events <= FLAGS_hough_window_size) {
-    return;
-  }
-
-  // Reshaping the event array into an Eigen matrix.
-  points.resize(2, num_events);
-  points.setZero();
-
-  // Add points from the actual message.
-  const auto ptr = points.data();
-  CHECK_NOTNULL(ptr);
-
-  if (FLAGS_perform_camera_undistortion) {
-    for (int i = 0; i < num_events; i++) {
-      const dvs_msgs::Event& event = feature_msg_.events[i];
-
-      *(ptr + 2 * i) = event_undist_map_x_(event.y, event.x);
-      *(ptr + 2 * i + 1) = event_undist_map_y_(event.y, event.x);
-    }
-  } else {
-    for (int i = 0; i < num_events; i++) {
-      const dvs_msgs::Event& event = feature_msg_.events[i];
-
-      *(ptr + 2 * i) = event.x;
-      *(ptr + 2 * i + 1) = event.y;
-    }
-  }
+  points_pos.conservativeResize(2, count_pos);
+  points_neg.conservativeResize(2, count_neg);
 }
 
 void Detector::drawPolarCorLine(
@@ -947,90 +871,84 @@ void Detector::drawPolarCorLine(
 }
 
 void Detector::addMaximaInRadius(
-    int i, int radius, const MatrixHough& total_hough_space,
-    int local_threshold, bool polarity, double timestamp,
+    int angle, int radius, const MatrixHough& hough_space,
     std::vector<hough2map::Detector::line>* new_maxima,
     std::vector<int>* new_maxima_value, bool skip_center) {
-  int m_l = std::max(i - FLAGS_hough_nms_radius, 0);
-  int m_r = std::min(i + FLAGS_hough_nms_radius + 1, kHoughAngularResolution);
+  int m_l = std::max(angle - FLAGS_hough_nms_radius, 0);
+  int m_r = std::min(angle + FLAGS_hough_nms_radius + 1, kHoughAngularResolution);
   int n_l = std::max(radius - FLAGS_hough_nms_radius, 0);
-  int n_r =
-      std::min(radius + FLAGS_hough_nms_radius + 1, kHoughRadiusResolution);
+  int n_r = std::min(radius + FLAGS_hough_nms_radius + 1, kHoughRadiusResolution);
 
   for (int m = m_l; m < m_r; m++) {
     for (int n = n_l; n < n_r; n++) {
-      if (skip_center && (n == radius) && (m == i)) {
+      if (skip_center && (n == radius) && (m == angle)) {
         continue;
       }
 
-      if ((total_hough_space(n, m) > local_threshold) &&
-          isLocalMaxima(total_hough_space, m, n)) {
-        new_maxima->push_back(addMaxima(m, n, timestamp, polarity));
-        new_maxima_value->push_back(total_hough_space(n, m));
+      if ((hough_space(n, m) > FLAGS_hough_threshold) &&
+          isLocalMaxima(hough_space, m, n)) {
+        new_maxima->emplace_back(n, thetas_(m), m);
+        new_maxima_value->emplace_back(hough_space(n, m));
       }
     }
   }
 }
 
 void Detector::applySuppressionRadius(
-    const std::vector<hough2map::Detector::line>& new_maxima,
-    const std::vector<int>& new_maxima_value,
-    std::vector<hough2map::Detector::line>* current_maxima) {
+    const std::vector<hough2map::Detector::line>& candidate_maxima,
+    const std::vector<int>& candidate_maxima_value,
+    std::vector<hough2map::Detector::line>* maxima) {
   // Create an index of all known maxima.
-  std::vector<int> new_maxima_index(new_maxima_value.size());
-  for (int i = 0; i < new_maxima_value.size(); i++) {
-    new_maxima_index[i] = i;
+  std::vector<int> candidate_maxima_index(candidate_maxima_value.size());
+  for (int i = 0; i < candidate_maxima_value.size(); i++) {
+    candidate_maxima_index[i] = i;
   }
 
   // Sort the index of all currently known maxima. Sort them by: 1. value; 2.
   // rho value; 3. theta value.
   std::stable_sort(
-      new_maxima_index.begin(), new_maxima_index.end(),
-      [&new_maxima_value, &new_maxima](const int i1, const int i2) {
-        if (new_maxima_value[i1] != new_maxima_value[i2]) {
-          return new_maxima_value[i1] > new_maxima_value[i2];
+      candidate_maxima_index.begin(), candidate_maxima_index.end(),
+      [&candidate_maxima_value, &candidate_maxima](const int i1, const int i2) {
+        if (candidate_maxima_value[i1] != candidate_maxima_value[i2]) {
+          return candidate_maxima_value[i1] > candidate_maxima_value[i2];
         } else {
-          if (new_maxima[i1].r != new_maxima[i2].r) {
-            return new_maxima[i1].r > new_maxima[i2].r;
+          if (candidate_maxima[i1].r != candidate_maxima[i2].r) {
+            return candidate_maxima[i1].r > candidate_maxima[i2].r;
           } else {
-            return new_maxima[i1].theta_idx > new_maxima[i2].theta_idx;
+            return candidate_maxima[i1].theta_idx > candidate_maxima[i2].theta_idx;
           }
         }
       });
 
   // Clear buffer of current maxima to re-add them later on.
-  current_maxima->clear();
+  maxima->clear();
 
   // Loop over all maxima according to the sorted order.
-  for (int i = 0; i < new_maxima.size(); i++) {
-    const hough2map::Detector::line& new_maximum =
-        new_maxima[new_maxima_index[i]];
+  for (int i = 0; i < candidate_maxima.size(); i++) {
+    const Detector::line& candidate_maximum =
+        candidate_maxima[candidate_maxima_index[i]];
 
     bool add_maximum = true;
     // Compare to all other maxima in the output buffer.
-    for (int j = 0; j < current_maxima->size(); j++) {
-      const hough2map::Detector::line& cur_maximum = (*current_maxima)[j];
+    for (int j = 0; j < maxima->size(); j++) {
+      const Detector::line& maximum = (*maxima)[j];
 
-      // If no maximum in the output buffer is of the same polarity and within
-      // the radius, the current maximum is kept and added to the output
-      // buffer.
-      if (cur_maximum.polarity == new_maximum.polarity) {
-        // Suppression radius.
-        float distance =
-            (cur_maximum.r - new_maximum.r) * (cur_maximum.r - new_maximum.r) +
-            (cur_maximum.theta_idx - new_maximum.theta_idx) *
-                (cur_maximum.theta_idx - new_maximum.theta_idx);
+      // If no maximum in the output buffer is within the suppression radius,
+      // the current maximum is kept and added to the output buffer.
+      int distance =
+          (maximum.r - candidate_maximum.r) * (maximum.r - candidate_maximum.r) +
+          (maximum.theta_idx - candidate_maximum.theta_idx) *
+              (maximum.theta_idx - candidate_maximum.theta_idx);
 
-        if (distance < FLAGS_hough_nms_radius * FLAGS_hough_nms_radius) {
+        if (distance < hough_nms_radius2_) {
           add_maximum = false;
           break;
         }
-      }
     }
 
     // Adding accepted maxima to the output buffer.
     if (add_maximum) {
-      current_maxima->push_back(new_maximum);
+      maxima->push_back(candidate_maximum);
     }
   }
 }
@@ -1075,21 +993,6 @@ void Detector::imageCallback(const sensor_msgs::Image::ConstPtr& msg) {
 
   cur_greyscale_img_ = cv_ptr->image;
   cv::cvtColor(cur_greyscale_img_, cur_greyscale_img_, cv::COLOR_GRAY2BGR);
-}
-
-// Just a funciton for creating new line structs.
-Detector::line Detector::addMaxima(
-    int angle, int rad, double cur_time, bool pol) {
-  hough2map::Detector::line new_line;
-
-  new_line.ID = 0;
-  new_line.r = rad;
-  new_line.theta = thetas_(angle);
-  new_line.theta_idx = angle;
-  new_line.time = cur_time;
-  new_line.polarity = pol;
-
-  return new_line;
 }
 
 // Generalized buffer query function for all odometry buffers.
