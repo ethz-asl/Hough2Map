@@ -174,7 +174,7 @@ class Detector {
 
   void eventPreProcessing(
       const dvs_msgs::EventArray::ConstPtr& orig_msg,
-      Eigen::MatrixXf& points_pos, Eigen::MatrixXf& points_neg);
+      Eigen::MatrixXf* points_pos, Eigen::MatrixXf* points_neg);
 
   // Initialisation functions.
   void computeUndistortionMapping();

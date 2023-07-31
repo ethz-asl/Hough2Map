@@ -37,6 +37,12 @@ DEFINE_double(
 DEFINE_double(buffer_size_s, 30, "Size of the odometry buffer in seconds");
 
 namespace hough2map {
+
+const int Detector::kHoughRadiusResolution;
+const int Detector::kHoughAngularResolution;
+const int Detector::kHoughMinAngle;
+const int Detector::kHoughMaxAngle;
+
 Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
     : nh_(nh), nh_private_(nh_private) {
   // Checking that flags have reasonable values.
@@ -48,6 +54,8 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
 
   // Set initial status to false until first message is processed.
   initialized = false;
+  last_points_pos.resize(2, 0);
+  last_points_neg.resize(2, 0);
 
   // Output file for the map data.
   if (FLAGS_map_output) {
@@ -336,35 +344,35 @@ void Detector::stepHoughTransform(
   radii.resize(kHoughAngularResolution, num_events);
   radii = (polar_param_mapping_ * points).cast<int>();
 
-  // Pre-allocate space for all the maxima at each timestep.
-  maxima_list->resize(num_events);
-
-  const size_t start_index = FLAGS_hough_window_size - 1;
   if (!initialized) {
+    // Start from an empty hough space.
     hough_space.setZero();
-    computeFullHoughSpace(start_index, hough_space, radii);
-    computeFullNMS(hough_space, maxima_list->data() + start_index);
+    computeFullHoughSpace(FLAGS_hough_window_size - 1, hough_space, radii);
+
+    // Initialize first set of maxima.
+    maxima_list->emplace_back();
+    computeFullNMS(hough_space, maxima_list->data());
   } else {
-    (*maxima_list)[start_index] = *last_maxima;
+    maxima_list->emplace_back(*last_maxima);
   }
 
   // Perform computations iteratively for the rest of the events.
   itterativeNMS(points, hough_space, radii, maxima_list);
 
   // Store last set of maxima to have a starting point for the next message.
-  *last_maxima = (*maxima_list)[num_events - 1];
+  *last_maxima = maxima_list->back();
 }
 
 void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
-  const auto kStartTime = std::chrono::high_resolution_clock::now();
+  CHECK_GE(msg->events.size(), 1);
 
-  int num_events = msg->events.size();
-  CHECK_GE(num_events, 1);
+  // Start timing.
+  const auto kStartTime = std::chrono::high_resolution_clock::now();
 
   // Reshaping the event array into an Eigen matrix.
   Eigen::MatrixXf points_pos;
   Eigen::MatrixXf points_neg;
-  eventPreProcessing(msg, points_pos, points_neg);
+  eventPreProcessing(msg, &points_pos, &points_neg);
 
   // The new points will now be the next old points.
   const int num_points_pos = points_pos.cols();
@@ -384,8 +392,8 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   // the active set of maxima in the Hough Space. These are basically the line
   // detections at each timestep. This whole storage is pre-initialized to
   // make it ready for parallelizing the whole process.
-  std::vector<std::vector<Detector::line>> maxima_list_pos(num_points_pos);
-  std::vector<std::vector<Detector::line>> maxima_list_neg(num_points_neg);
+  std::vector<std::vector<Detector::line>> maxima_list_pos;
+  std::vector<std::vector<Detector::line>> maxima_list_neg;
 
   stepHoughTransform(
       points_pos, hough_space_pos, &last_maxima_pos, initialized,
@@ -406,6 +414,7 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   }*/
 
   // Calculate statistics
+  const size_t num_events = num_points_pos + num_points_neg;
   if (num_events > 0) {
     std::chrono::duration<double, std::micro> duration_us =
         std::chrono::high_resolution_clock::now() - kStartTime;
@@ -482,12 +491,9 @@ void Detector::itterativeNMS(
   const int num_events = points.cols();
 
   for (int event = FLAGS_hough_window_size; event < num_events; event++) {
-    // Establishing the lists of maxima for this timestep and the ones of the
-    // previous timestep
-    std::vector<hough2map::Detector::line> &current_maxima =
-        (*maxima_list)[event];
+    // Take the maxima at the previous timestep.
     std::vector<hough2map::Detector::line> &previous_maxima =
-        (*maxima_list)[event - 1];
+        maxima_list->back();
 
     // Incrementing the accumulator cells for the current event.
     for (int angle = 0; angle < kHoughAngularResolution; angle++) {
@@ -512,7 +518,8 @@ void Detector::itterativeNMS(
 
     // Remember which past maxima are no longer maxima so that
     // we don't need to check again at the end.
-    std::vector<int> discard(previous_maxima.size(), 0);
+    bool changed = false;
+    std::vector<bool> discard(previous_maxima.size(), false);
 
     // PHASE 1 - Obtain candidates for global maxima
 
@@ -548,6 +555,7 @@ void Detector::itterativeNMS(
               if ((n == previous_maxima[i].r) &&
                   (m == previous_maxima[i].theta_idx)) {
                 // We need to discard an old maximum.
+                changed = true;
                 discard[i] = true;
 
                 // And add a new one.
@@ -602,6 +610,7 @@ void Detector::itterativeNMS(
             (angle == previous_maxima[k].theta_idx)) {
           // Mark as discarded since we will already have added it
           // in the next step if it still is above the threshold.
+          changed = true;
           discard[k] = true;
 
           // Re-add to list of possible maxima for later pruning.
@@ -643,12 +652,18 @@ void Detector::itterativeNMS(
     }
 
     if (new_maxima.empty()) {
-      // No new maxima in the temporary storage, so we only get rid of the
-      // expired ones and keep the rest as it was unchanged.
-      for (int i = 0; i < previous_maxima.size(); i++) {
-        if (!discard[i]) {
-          current_maxima.emplace_back(previous_maxima[i]);
+      // If no discards then nothing changed and we can skip this entirely.
+      if (changed) {
+        // No new maxima in the temporary storage, so we only get rid of the
+        // expired ones and keep the rest as it was unchanged. This keeps the
+        // sorting stable so no need to redo it.
+        std::vector<Detector::line> current_maxima;
+        for (int i = 0; i < previous_maxima.size(); i++) {
+          if (!discard[i]) {
+            current_maxima.emplace_back(previous_maxima[i]);
+          }
         }
+        maxima_list->emplace_back(current_maxima);
       }
     } else {
       // We discard all expired old maxima and add the ones that are still
@@ -662,6 +677,7 @@ void Detector::itterativeNMS(
       }
 
       // PHASE 2 - Detect and apply suppression
+      std::vector<Detector::line> current_maxima;
 
       // Apply the suppression radius.
       applySuppressionRadius(new_maxima, new_maxima_value, &current_maxima);
@@ -674,8 +690,7 @@ void Detector::itterativeNMS(
         for (int i = 0; i < previous_maxima.size(); i++) {
           if (!discard[i]) {
             bool found = false;
-            for (const hough2map::Detector::line& current_maximum :
-                 current_maxima) {
+            for (const Detector::line& current_maximum : current_maxima) {
               if ((current_maximum.r == previous_maxima[i].r) &&
                   (current_maximum.theta_idx == previous_maxima[i].theta_idx)) {
                 found = true;
@@ -698,12 +713,16 @@ void Detector::itterativeNMS(
           break;
         }
       }
+
+      // Sort and confirm if something changed.
+      std::stable_sort(current_maxima.begin(), current_maxima.end());
+      if (current_maxima != previous_maxima) {
+        maxima_list->emplace_back(current_maxima);
+      }
     }
 
-    std::stable_sort(current_maxima.begin(), current_maxima.end());
-
     // DEBUG
-    /*{
+    {
       MatrixHough hough_space_debug;
       std::vector<Detector::line> maxima_debug;
 
@@ -712,6 +731,9 @@ void Detector::itterativeNMS(
       computeFullNMS(hough_space_debug, &maxima_debug);
 
       std::stable_sort(maxima_debug.begin(), maxima_debug.end());
+
+      std::vector<hough2map::Detector::line> &current_maxima =
+        maxima_list->back();
 
       bool different = false;
       if (maxima_debug.size() == current_maxima.size()) {
@@ -747,7 +769,7 @@ void Detector::itterativeNMS(
 
         exit(0);
       }
-    }*/
+    }
   }
 }
 
@@ -801,7 +823,7 @@ void Detector::computeFullHoughSpace(
 // Event preprocessing prior to first HT.
 void Detector::eventPreProcessing(
     const dvs_msgs::EventArray::ConstPtr& orig_msg,
-    Eigen::MatrixXf& points_pos, Eigen::MatrixXf& points_neg) {
+    Eigen::MatrixXf* points_pos, Eigen::MatrixXf* points_neg) {
   const int num_events = orig_msg->events.size();
 
   // How many points do we carry over from previous messages.
@@ -809,12 +831,12 @@ void Detector::eventPreProcessing(
   const int num_last_points_neg = last_points_neg.cols();
 
   // Preallocate more space than needed.
-  points_pos.resize(2, num_events + num_last_points_pos);
-  points_neg.resize(2, num_events + num_last_points_neg);
+  points_pos->resize(2, num_events + num_last_points_pos);
+  points_neg->resize(2, num_events + num_last_points_neg);
 
   // Concatenate previous points with the new ones.
-  points_pos.block(0, 0, 2, num_last_points_pos) = last_points_pos;
-  points_neg.block(0, 0, 2, num_last_points_neg) = last_points_neg;
+  points_pos->block(0, 0, 2, num_last_points_pos) = last_points_pos;
+  points_neg->block(0, 0, 2, num_last_points_neg) = last_points_neg;
 
   // Preprocess events and potentially subsample.
   int count_pos = num_last_points_pos;
@@ -837,18 +859,18 @@ void Detector::eventPreProcessing(
     // Sort by polarity as we calculate two separate HTs, since lines are
     // usually one homogeneous transition in intensity across.
     if (e.polarity) {
-      points_pos(0, count_pos) = x;
-      points_pos(1, count_pos) = y;
+      (*points_pos)(0, count_pos) = x;
+      (*points_pos)(1, count_pos) = y;
       count_pos++;
     } else {
-      points_neg(0, count_neg) = x;
-      points_neg(1, count_neg) = y;
+      (*points_neg)(0, count_neg) = x;
+      (*points_neg)(1, count_neg) = y;
       count_neg++;
     }
   }
 
-  points_pos.conservativeResize(2, count_pos);
-  points_neg.conservativeResize(2, count_neg);
+  points_pos->conservativeResize(2, count_pos);
+  points_neg->conservativeResize(2, count_neg);
 }
 
 void Detector::drawPolarCorLine(
