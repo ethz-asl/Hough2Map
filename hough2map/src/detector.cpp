@@ -700,6 +700,8 @@ void Detector::itterativeNMS(
       }
     }
 
+    std::stable_sort(current_maxima.begin(), current_maxima.end());
+
     // DEBUG
     /*{
       MatrixHough hough_space_debug;
@@ -709,20 +711,12 @@ void Detector::itterativeNMS(
       computeFullHoughSpace(event, hough_space_debug, radii);
       computeFullNMS(hough_space_debug, &maxima_debug);
 
+      std::stable_sort(maxima_debug.begin(), maxima_debug.end());
+
       bool different = false;
       if (maxima_debug.size() == current_maxima.size()) {
         for (size_t i = 0; i < maxima_debug.size(); ++i) {
-          // The ordering might not always be preserved, but
-          // we care about the content so we search exhaustively.
-          bool found = false;
-          for (size_t j = 0; j < current_maxima.size(); ++j){
-            if (maxima_debug[i] == current_maxima[j]) {
-              found = true;
-              break;
-            }
-          }
-
-          if (!found) {
+          if (maxima_debug[i] != current_maxima[i]) {
             different = true;
             break;
           }

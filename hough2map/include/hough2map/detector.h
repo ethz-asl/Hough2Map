@@ -46,6 +46,14 @@ class Detector {
       return (r == other.r) && (theta_idx == other.theta_idx);
     }
 
+    bool operator!=(const line& other) const {
+      return !operator==(other);
+    }
+
+    bool operator<(const line& other) const {
+        return (r != other.r) ? r < other.r : theta_idx < other.theta_idx;
+    }
+
     int r;
     float theta;
     int theta_idx;
