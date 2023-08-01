@@ -169,7 +169,7 @@ void Detector::initializeSinCosMap(
     Eigen::EigenBase<DerivedMat>& sin_cos_map, const int kMinAngle,
     const int kMaxAngle, const int kNumSteps) {
   // Computing the angular step size.
-  CHECK_GT(kNumSteps - 1, 0);
+  CHECK_GT(kNumSteps, 1);
   const double kDeltaTheta = (kMaxAngle - kMinAngle) / (kNumSteps - 1);
   // Resizing the respective output matrizes.
   angles.derived().resize(kNumSteps, 1);
@@ -334,16 +334,16 @@ void Detector::orientationCallback(const custom_msgs::orientationEstimate msg) {
 void Detector::stepHoughTransform(
       const Eigen::MatrixXf& points, Detector::MatrixHough& hough_space,
       std::vector<hough2map::Detector::line> *last_maxima, bool initialized,
-      std::vector<std::vector<hough2map::Detector::line>> *maxima_list) {
+      std::vector<std::vector<hough2map::Detector::line>> *maxima_list,
+      std::vector<size_t> *maxima_change) {
   CHECK_NOTNULL(last_maxima);
   CHECK_NOTNULL(maxima_list);
-
-  const int num_events = points.cols();
+  CHECK_NOTNULL(maxima_change);
 
   // Pre-compute all the radii for each theta hypothesis. This parameter
   // represents one axis of the Hough space.
   Eigen::MatrixXi radii;
-  radii.resize(kHoughAngularResolution, num_events);
+  radii.resize(kHoughAngularResolution, points.cols());
   radii = (polar_param_mapping_ * points).cast<int>();
 
   if (!initialized) {
@@ -359,7 +359,7 @@ void Detector::stepHoughTransform(
   }
 
   // Perform computations iteratively for the rest of the events.
-  itterativeNMS(points, hough_space, radii, maxima_list);
+  iterativeNMS(points, hough_space, radii, maxima_list, maxima_change);
 
   // Store last set of maxima to have a starting point for the next message.
   *last_maxima = maxima_list->back();
@@ -396,13 +396,15 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   // make it ready for parallelizing the whole process.
   std::vector<std::vector<Detector::line>> maxima_list_pos;
   std::vector<std::vector<Detector::line>> maxima_list_neg;
+  std::vector<size_t> maxima_change_pos;
+  std::vector<size_t> maxima_change_neg;
 
   stepHoughTransform(
       points_pos, hough_space_pos, &last_maxima_pos, initialized,
-      &maxima_list_pos);
+      &maxima_list_pos, &maxima_change_pos);
   stepHoughTransform(
       points_neg, hough_space_neg, &last_maxima_neg, initialized,
-      &maxima_list_neg);
+      &maxima_list_neg, &maxima_change_neg);
 
   initialized = true;
 
@@ -438,9 +440,9 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   // NOTE: This slows everything down by a very large margin
   if (FLAGS_show_lines_in_video) {
     visualizeCurrentLineDetections(
-        true, points_pos, maxima_list_pos, hough_space_pos);
+        true, points_pos, maxima_list_pos, maxima_change_pos);
     visualizeCurrentLineDetections(
-        false, points_neg, maxima_list_neg, hough_space_neg);
+        false, points_neg, maxima_list_neg, maxima_change_neg);
   }
 }
 
@@ -448,7 +450,7 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
 void Detector::visualizeCurrentLineDetections(
     bool polarity, const Eigen::MatrixXf& points, 
     const std::vector<std::vector<hough2map::Detector::line>>& maxima_list,
-    const Detector::MatrixHough& hough_space) const {
+    const std::vector<size_t>& maxima_change) const {
   const int num_events = points.cols();
 
   // Predefined colors and strings
@@ -460,12 +462,15 @@ void Detector::visualizeCurrentLineDetections(
       polarity ? "Detected lines (pos)" : "Detected lines (neg)";
 
   // Getting the horizontal positions of all vertical line detections.
-  size_t step_size = FLAGS_show_lines_every_nth;
+  size_t maxima_index = 0;
+  const size_t step_size = FLAGS_show_lines_every_nth;
   for (size_t i = FLAGS_hough_window_size; i < num_events; i += step_size) {
-    cv::Mat vis_frame;
-    cv::remap(
+    cv::Mat vis_frame(
+        cv::Size(camera_resolution_width_, camera_resolution_height_), CV_8UC3,
+        cv::Scalar(255, 255, 255));
+    /*cv::remap(
         cur_greyscale_img_, vis_frame, image_undist_map_x_,
-        image_undist_map_y_, cv::INTER_LINEAR);
+        image_undist_map_y_, cv::INTER_LINEAR);*/
 
     for (size_t j = i - FLAGS_hough_window_size + 1; j <= i; j++) {
       uint32_t x = static_cast<uint32_t>(points(0, j));
@@ -473,8 +478,13 @@ void Detector::visualizeCurrentLineDetections(
       vis_frame.at<cv::Vec3b>(y, x) = color_vec3b;
     }
 
-    for (auto& maxima : maxima_list[i]) {
-      drawPolarCorLine(vis_frame, maxima.r, maxima.theta, color_scalar); 
+    if ((maxima_index < maxima_change.size()) &&
+        (i >= maxima_change[maxima_index])) {
+      ++maxima_index;
+    }
+
+    for (auto& maxima : maxima_list[maxima_index]) {
+      drawPolarCorLine(vis_frame, maxima.r, maxima.theta, color_scalar);
     }
 
     cv::imshow(cv_window, vis_frame);
@@ -484,10 +494,15 @@ void Detector::visualizeCurrentLineDetections(
 
 // Performing itterative Non-Maximum suppression on the current batch of
 // events based on a beginning Hough Space.
-void Detector::itterativeNMS(
+void Detector::iterativeNMS(
     const Eigen::MatrixXf& points, MatrixHough& hough_space, 
     const Eigen::MatrixXi& radii,
-    std::vector<std::vector<Detector::line>>* maxima_list) {
+    std::vector<std::vector<Detector::line>>* maxima_list,
+    std::vector<size_t> *maxima_change) {
+  CHECK_NOTNULL(maxima_list);
+  CHECK_NOTNULL(maxima_change)->clear();
+  CHECK_GT(maxima_list->size(), 0u);
+
   std::vector<hough2map::Detector::line> new_maxima;
   std::vector<int> new_maxima_value;
   const int num_events = points.cols();
@@ -666,6 +681,7 @@ void Detector::itterativeNMS(
           }
         }
         maxima_list->emplace_back(current_maxima);
+        maxima_change->emplace_back(event);
       }
     } else {
       // We discard all expired old maxima and add the ones that are still
@@ -720,11 +736,12 @@ void Detector::itterativeNMS(
       std::stable_sort(current_maxima.begin(), current_maxima.end());
       if (current_maxima != previous_maxima) {
         maxima_list->emplace_back(current_maxima);
+        maxima_change->emplace_back(event);
       }
     }
 
     // DEBUG
-    {
+    /*{
       MatrixHough hough_space_debug;
       std::vector<Detector::line> maxima_debug;
 
@@ -771,7 +788,7 @@ void Detector::itterativeNMS(
 
         exit(0);
       }
-    }
+    }*/
   }
 }
 
@@ -1010,7 +1027,7 @@ void Detector::imageCallback(const sensor_msgs::Image::ConstPtr& msg) {
   }
 
   cur_greyscale_img_ = cv_ptr->image;
-  cv::cvtColor(cur_greyscale_img_, cur_greyscale_img_, cv::COLOR_GRAY2BGR);
+  //cv::cvtColor(cur_greyscale_img_, cur_greyscale_img_, cv::COLOR_GRAY2BGR);
 }
 
 // Generalized buffer query function for all odometry buffers.

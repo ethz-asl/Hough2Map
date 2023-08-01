@@ -141,12 +141,13 @@ class Detector {
   // Functions for Hough transform computation.
   void stepHoughTransform(
       const Eigen::MatrixXf& points, MatrixHough& hough_space,
-      std::vector<hough2map::Detector::line> *last_maxima, bool initialized,
-      std::vector<std::vector<hough2map::Detector::line>> *maxima_list);
+      std::vector<Detector::line> *last_maxima, bool initialized,
+      std::vector<std::vector<Detector::line>>* maxima_list,
+      std::vector<size_t>* maxima_change);
 
   void addMaximaInRadius(
       int angle, int radius, const MatrixHough& hough_space,
-      std::vector<hough2map::Detector::line>* new_maxima,
+      std::vector<Detector::line>* new_maxima,
       std::vector<int>* new_maxima_value, bool skip_center = false);
   void applySuppressionRadius(
       const std::vector<Detector::line>& candidate_maxima,
@@ -165,10 +166,11 @@ class Detector {
 
   void computeFullNMS(
       const MatrixHough& hough_space, std::vector<Detector::line> *maxima);
-  void itterativeNMS(
+  void iterativeNMS(
       const Eigen::MatrixXf& points, MatrixHough& hough_space, 
       const Eigen::MatrixXi& radii,
-      std::vector<std::vector<Detector::line>>* maxima_list);
+      std::vector<std::vector<Detector::line>>* maxima_list,
+      std::vector<size_t>* maxima_change);
 
   void eventPreProcessing(
       const dvs_msgs::EventArray::ConstPtr& orig_msg,
@@ -193,14 +195,14 @@ class Detector {
   void visualizeCurrentLineDetections(
       bool polarity, const Eigen::MatrixXf& points, 
       const std::vector<std::vector<Detector::line>>& maxima_list,
-      const MatrixHough& hough_space) const;
+      const std::vector<size_t>& maxima_change) const;
 
   // For the very first message we need separate processing (e.g. a full HT).
   bool initialized;
   MatrixHough hough_space_pos;
   MatrixHough hough_space_neg;
-  std::vector<hough2map::Detector::line> last_maxima_pos;
-  std::vector<hough2map::Detector::line> last_maxima_neg;
+  std::vector<Detector::line> last_maxima_pos;
+  std::vector<Detector::line> last_maxima_neg;
   Eigen::MatrixXf last_points_pos;
   Eigen::MatrixXf last_points_neg;
   
