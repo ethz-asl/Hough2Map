@@ -8,6 +8,8 @@
 DEFINE_string(rosbag_path, "", "Rosbag to process.");
 DEFINE_string(event_topic, "/dvs/events", "Topic for event messages.");
 DEFINE_string(image_topic, "/dvs/image_raw", "Topic for image messages.");
+DEFINE_string(
+    dvs_calibration, "calibration.yaml", "Camera parameters for the DVS.");
 
 DEFINE_int32(
     hough_threshold, 15, "Threshold for the first level Hough transform.");
@@ -185,7 +187,7 @@ void Detector::loadCalibration() {
   // File path to calibration file.
   std::string package_path = ros::package::getPath("hough2map");
   std::string calibration_file =
-      package_path + "/share/" + calibration_file_name;
+      package_path + "/share/" + FLAGS_dvs_calibration;
 
   cv::FileStorage fs(calibration_file, cv::FileStorage::READ);
 

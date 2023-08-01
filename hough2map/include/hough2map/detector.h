@@ -87,8 +87,6 @@ class Detector {
   const char* debug_file_path = "/tmp/debug.txt";
   std::ofstream debug_file;
 
-  const char* calibration_file_name = "calibration.yaml";
-
   // Timing debugging.
   double total_events_timing_us;
   double total_msgs_timing_ms;

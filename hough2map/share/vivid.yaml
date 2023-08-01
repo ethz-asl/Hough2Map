@@ -1,0 +1,10 @@
+%YAML:1.0
+cam0:
+  cam_overlaps: []
+  camera_model: pinhole
+  distortion_coeffs: [-0.4281339311458361, 0.771092080601114, -0.00010143891680090658,
+    -0.0014392819462272514]
+  distortion_model: radtan
+  intrinsics: [783.3165271727371, 779.7937766565468, 307.3880210739028, 249.36584845950097]
+  resolution: [640, 480]
+  rostopic: /dvs/image_recon
