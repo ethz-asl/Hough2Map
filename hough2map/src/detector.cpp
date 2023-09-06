@@ -115,6 +115,7 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
 
     cv::namedWindow("Detected lines (pos)", cv::WINDOW_NORMAL);
     cv::namedWindow("Detected lines (neg)", cv::WINDOW_NORMAL);
+    cv::namedWindow("Camera image", cv::WINDOW_NORMAL);
     topics.emplace_back(FLAGS_image_topic);
   }
 
@@ -1026,8 +1027,9 @@ void Detector::imageCallback(const sensor_msgs::Image::ConstPtr& msg) {
     return;
   }
 
-  cur_greyscale_img_ = cv_ptr->image;
-  //cv::cvtColor(cur_greyscale_img_, cur_greyscale_img_, cv::COLOR_GRAY2BGR);
+  // Republish the camera image at the same rate for visualization.
+  cv::imshow("Camera image", cv_ptr->image);
+  cv::waitKey(1);
 }
 
 // Generalized buffer query function for all odometry buffers.
