@@ -94,10 +94,10 @@ class Detector {
   uint64_t total_msgs;
 
   // General Parameters for 1st Hough Transform.
-  static const int kHoughRadiusResolution = 240;
+  static const int kHoughRadiusResolution = 640;
   static const int kHoughAngularResolution = 21;
-  static const int kHoughMinAngle = -10;
-  static const int kHoughMaxAngle = 10;
+  static const int kHoughMinAngle = -5;
+  static const int kHoughMaxAngle = 5;
 
   // Precomputing possible angles and their sin/cos values in order to vectorize
   // the HT. Also precomputing the squared suppression radius.
