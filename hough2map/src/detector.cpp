@@ -58,6 +58,8 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   initialized = false;
   last_points_pos.resize(2, 0);
   last_points_neg.resize(2, 0);
+  last_times_pos.resize(0);
+  last_times_neg.resize(0);
 
   // Output file for the map data.
   if (FLAGS_map_output) {
@@ -373,9 +375,9 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   const auto kStartTime = std::chrono::high_resolution_clock::now();
 
   // Reshaping the event array into an Eigen matrix.
-  Eigen::MatrixXf points_pos;
-  Eigen::MatrixXf points_neg;
-  eventPreProcessing(msg, &points_pos, &points_neg);
+  Eigen::MatrixXf points_pos, points_neg;
+  Eigen::VectorXd times_pos, times_neg;
+  eventPreProcessing(msg, &points_pos, &points_neg, &times_pos, &times_neg);
 
   // The new points will now be the next old points.
   const int num_points_pos = points_pos.cols();
@@ -384,6 +386,8 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   const int keep_neg = std::min(FLAGS_hough_window_size, num_points_neg);
   last_points_pos = points_pos.block(0, num_points_pos - keep_pos, 2, keep_pos);
   last_points_neg = points_neg.block(0, num_points_neg - keep_neg, 2, keep_neg);
+  last_times_pos = times_pos.segment(num_points_pos - keep_pos, keep_pos);
+  last_times_neg = times_neg.segment(num_points_neg - keep_neg, keep_neg);
 
   // Wait until we have enough points to initialize.
   if (num_points_pos < FLAGS_hough_window_size ||
@@ -843,7 +847,8 @@ void Detector::computeFullHoughSpace(
 // Event preprocessing prior to first HT.
 void Detector::eventPreProcessing(
     const dvs_msgs::EventArray::ConstPtr& orig_msg,
-    Eigen::MatrixXf* points_pos, Eigen::MatrixXf* points_neg) {
+    Eigen::MatrixXf* points_pos, Eigen::MatrixXf* points_neg,
+    Eigen::VectorXd* times_pos, Eigen::VectorXd* times_neg) {
   const int num_events = orig_msg->events.size();
 
   // How many points do we carry over from previous messages.
@@ -853,10 +858,30 @@ void Detector::eventPreProcessing(
   // Preallocate more space than needed.
   points_pos->resize(2, num_events + num_last_points_pos);
   points_neg->resize(2, num_events + num_last_points_neg);
+  times_pos->resize(num_events + num_last_points_pos);
+  times_neg->resize(num_events + num_last_points_neg);
 
   // Concatenate previous points with the new ones.
   points_pos->block(0, 0, 2, num_last_points_pos) = last_points_pos;
   points_neg->block(0, 0, 2, num_last_points_neg) = last_points_neg;
+  times_pos->segment(0, num_last_points_pos) = last_times_pos;
+  times_neg->segment(0, num_last_points_neg) = last_times_neg;
+
+  // Filter grid and initialization
+  const size_t grid_size = 8;
+  const size_t max_events = 8;
+  const double event_ttl = 0.005;
+  std::queue<double> filter_grid[480 / grid_size][640 / grid_size];
+  for (int i = 0; i < num_last_points_pos; ++i) {
+    size_t grid_x = last_points_pos(0, i) / grid_size;
+    size_t grid_y = last_points_pos(1, i) / grid_size;
+    filter_grid[grid_y][grid_x].push(last_times_pos(i));
+  }
+  for (int i = 0; i < num_last_points_neg; ++i) {
+    size_t grid_x = last_points_neg(0, i) / grid_size;
+    size_t grid_y = last_points_neg(1, i) / grid_size;
+    filter_grid[grid_y][grid_x].push(last_times_neg(i));
+  }
 
   // Preprocess events and potentially subsample.
   int count_pos = num_last_points_pos;
@@ -866,31 +891,50 @@ void Detector::eventPreProcessing(
 
     // Seemingly broken pixels in the DVS (millions of exactly equal events at
     // once at random). This needs to be adapted if you use another device.
-    if (((e.x == 19) && (e.y == 18)) || ((e.x == 43) && (e.y == 72)) ||
+    /*if (((e.x == 19) && (e.y == 18)) || ((e.x == 43) && (e.y == 72)) ||
         ((e.x == 89) && (e.y == 52)) || ((e.x == 25) && (e.y == 42)) ||
         ((e.x == 61) && (e.y == 71)) || ((e.x == 37) && (e.y == 112))) {
       continue;
-    }
+    }*/
+
+    double time = e.ts.toSec();
 
     // Undistort events based on camera calibration.
     float x = event_undist_map_x_(e.y, e.x);
     float y = event_undist_map_y_(e.y, e.x);
 
+    size_t grid_x = x / grid_size;
+    size_t grid_y = y / grid_size;
+    while (!filter_grid[grid_y][grid_x].empty() && 
+        filter_grid[grid_y][grid_x].front() + event_ttl < time) {
+      filter_grid[grid_y][grid_x].pop();
+    }
+
+    if (filter_grid[grid_y][grid_x].size() < max_events) {
+      filter_grid[grid_y][grid_x].push(time);
+    } else {
+      continue;
+    }
+    
     // Sort by polarity as we calculate two separate HTs, since lines are
     // usually one homogeneous transition in intensity across.
     if (e.polarity) {
       (*points_pos)(0, count_pos) = x;
       (*points_pos)(1, count_pos) = y;
+      (*times_pos)(count_pos) = time;
       count_pos++;
     } else {
       (*points_neg)(0, count_neg) = x;
       (*points_neg)(1, count_neg) = y;
+      (*times_neg)(count_neg) = time;
       count_neg++;
     }
   }
 
   points_pos->conservativeResize(2, count_pos);
   points_neg->conservativeResize(2, count_neg);
+  times_pos->conservativeResize(count_pos);
+  times_neg->conservativeResize(count_neg);
 }
 
 void Detector::drawPolarCorLine(

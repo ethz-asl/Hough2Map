@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cv_bridge/cv_bridge.h>
 #include <deque>
+#include <queue>
 #include <fstream>
 #include <sstream>
 #include <gflags/gflags.h>
@@ -174,7 +175,8 @@ class Detector {
 
   void eventPreProcessing(
       const dvs_msgs::EventArray::ConstPtr& orig_msg,
-      Eigen::MatrixXf* points_pos, Eigen::MatrixXf* points_neg);
+      Eigen::MatrixXf* points_pos, Eigen::MatrixXf* points_neg,
+      Eigen::VectorXd* times_pos, Eigen::VectorXd* times_neg);
 
   // Initialisation functions.
   void computeUndistortionMapping();
@@ -205,6 +207,8 @@ class Detector {
   std::vector<Detector::line> last_maxima_neg;
   Eigen::MatrixXf last_points_pos;
   Eigen::MatrixXf last_points_neg;
+  Eigen::VectorXd last_times_pos;
+  Eigen::VectorXd last_times_neg;
   
   // Odometry.
   std::deque<Eigen::Vector3d> raw_gps_buffer_;
