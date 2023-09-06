@@ -170,7 +170,7 @@ void Detector::initializeSinCosMap(
     const int kMaxAngle, const int kNumSteps) {
   // Computing the angular step size.
   CHECK_GT(kNumSteps, 1);
-  const double kDeltaTheta = (kMaxAngle - kMinAngle) / (kNumSteps - 1);
+  const double kDeltaTheta = (kMaxAngle - kMinAngle) / (kNumSteps - 1.0);
   // Resizing the respective output matrizes.
   angles.derived().resize(kNumSteps, 1);
   sin_cos_map.derived().resize(kNumSteps, 2);
