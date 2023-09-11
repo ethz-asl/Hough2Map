@@ -16,6 +16,7 @@
 #include <cv_bridge/cv_bridge.h>
 #include <deque>
 #include <queue>
+#include <map>
 #include <fstream>
 #include <sstream>
 #include <gflags/gflags.h>
@@ -90,6 +91,7 @@ class Detector {
 
   // Timing debugging.
   double total_events_timing_us;
+  double total_tracking_timing_ms;
   double total_msgs_timing_ms;
   uint64_t total_events;
   uint64_t total_msgs;
@@ -222,6 +224,28 @@ class Detector {
 
   // Image to display the events on for visualization purposes only.
   cv::Mat cur_greyscale_img_;
+
+  // Tracking parameters
+  int32_t tracking_angle_step;
+  int32_t tracking_pixel_step;
+  double tracking_max_jump;
+  size_t tracking_mean_window;
+
+  struct track_point {
+    double pixel;
+    double angle;
+    double time;
+
+    track_point() : pixel(-1.0), angle(-1.0), time(-1.0) {}
+
+    track_point(double _pixel, double _angle, double _time) :
+        pixel(_pixel), angle(_angle), time(_time) {}
+  };
+
+  size_t next_track_id;
+  std::map<size_t, std::vector<track_point>> tracks;
+
+  double start_time;
 };
 }  // namespace hough2map
 

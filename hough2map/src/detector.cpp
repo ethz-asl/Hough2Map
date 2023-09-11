@@ -38,6 +38,12 @@ DEFINE_double(
     "Camera offset perpendicular to the left of the train axis");
 DEFINE_double(buffer_size_s, 30, "Size of the odometry buffer in seconds");
 
+DEFINE_int32(tracking_angle_step, 3, "");
+DEFINE_int32(tracking_pixel_step, 5, "");
+DEFINE_double(tracking_max_jump, 0.4, "");
+DEFINE_int32(tracking_mean_window, 20, "");
+DEFINE_int32(tracking_min_length, 500, "");
+
 namespace hough2map {
 
 const int Detector::kHoughRadiusResolution;
@@ -54,6 +60,13 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   CHECK_GT(FLAGS_hough_threshold, 0);
   CHECK(!FLAGS_rosbag_path.empty());
 
+  // Tracking parameters
+  next_track_id = 0;
+  tracking_angle_step = FLAGS_tracking_angle_step;
+  tracking_pixel_step = FLAGS_tracking_pixel_step;
+  tracking_max_jump = FLAGS_tracking_max_jump;
+  tracking_mean_window = static_cast<size_t>(FLAGS_tracking_mean_window);
+
   // Set initial status to false until first message is processed.
   initialized = false;
   last_points_pos.resize(2, 0);
@@ -64,10 +77,7 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   // Output file for the map data.
   if (FLAGS_map_output) {
     map_file.open(map_file_path);
-
-    if (map_file.is_open()) {
-      map_file << "time,rho,theta" << std::endl;
-    } else {
+    if (!map_file.is_open()) {
       LOG(FATAL) << "Could not open file:" << map_file_path << std::endl;
     }
   }
@@ -77,6 +87,7 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
 
   // Timing statistics for performance evaluation.
   total_events_timing_us = 0.0;
+  total_tracking_timing_ms = 0.0;
   total_msgs_timing_ms = 0.0;
   total_events = 0;
   total_msgs = 0;
@@ -373,6 +384,9 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
 
   // Start timing.
   const auto kStartTime = std::chrono::high_resolution_clock::now();
+  if (!initialized) {
+    start_time = msg->header.stamp.toSec();
+  }
 
   // Reshaping the event array into an Eigen matrix.
   Eigen::MatrixXf points_pos, points_neg;
@@ -407,48 +421,143 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   stepHoughTransform(
       points_pos, hough_space_pos, &last_maxima_pos, initialized,
       &maxima_list_pos, &maxima_change_pos);
-  stepHoughTransform(
-      points_neg, hough_space_neg, &last_maxima_neg, initialized,
-      &maxima_list_neg, &maxima_change_neg);
-
+  // stepHoughTransform(
+  //     points_neg, hough_space_neg, &last_maxima_neg, initialized,
+  //     &maxima_list_neg, &maxima_change_neg);
   initialized = true;
 
+  // Dump detected maxima to file
   /*if (FLAGS_map_output) {
-    for (const auto& maximas : maxima_list) {
-      for (const Detector::line& maxima : maximas) {
-        map_file << maxima.time << "," << maxima.r << "," << maxima.theta
-                 << std::endl;
+    for (size_t i = 1; i < maxima_list_pos.size(); ++i) {
+      const size_t event_index = maxima_change_pos[i - 1];
+      map_file 
+          << std::fixed << std::setprecision(12) << times_pos(event_index)
+          << "," << maxima_list_pos[i].size() << std::endl;
+      for (const line& maxima : maxima_list_pos[i]) {
+        map_file << maxima.r << "," << maxima.theta_idx << std::endl;
       }
     }
   }*/
 
-  // Calculate statistics
-  const size_t num_events = num_points_pos + num_points_neg;
-  if (num_events > 0) {
-    std::chrono::duration<double, std::micro> duration_us =
-        std::chrono::high_resolution_clock::now() - kStartTime;
-
-    total_events_timing_us += duration_us.count();
-    total_msgs_timing_ms += duration_us.count() / 1000.0;
-
-    total_events += num_events;
-    total_msgs++;
-
-    LOG(INFO) << detector_name_ << std::fixed << std::setprecision(2)
-              << std::setfill(' ') << " speed: " << std::setw(6)
-              << total_events_timing_us / total_events << " us/event | "
-              << std::setw(6) << total_msgs_timing_ms / total_msgs
-              << " ms/msg | " << std::setw(6) << num_events << " e/msg";
-  }
+  const auto kHoughTime = std::chrono::high_resolution_clock::now();
 
   // If visualizations are turned on display them in the video stream.
   // NOTE: This slows everything down by a very large margin
   if (FLAGS_show_lines_in_video) {
     visualizeCurrentLineDetections(
         true, points_pos, maxima_list_pos, maxima_change_pos);
-    visualizeCurrentLineDetections(
-        false, points_neg, maxima_list_neg, maxima_change_neg);
+    // visualizeCurrentLineDetections(
+    //     false, points_neg, maxima_list_neg, maxima_change_neg);
   }
+
+  // Greedy heuristic for line tracking
+  for (size_t i = 1; i < maxima_list_pos.size(); i++) {
+    double time = times_pos(maxima_change_pos[i - 1]);
+
+    // Get sliding mean of tracking head
+    std::map<size_t, track_point> track_means;
+    for (auto it = tracks.begin(); it != tracks.end(); it++) {
+      const size_t track_len = it->second.size();
+      const size_t back = std::min(tracking_mean_window, track_len);
+      double mean_pixel = 0;
+      double mean_angle = 0;
+      for (size_t j = 0; j < back; ++j) {
+        mean_pixel += it->second[track_len - 1 - j].pixel;
+        mean_angle += it->second[track_len - 1 - j].angle;
+      }
+      mean_pixel /= back;
+      mean_angle /= back;
+
+      track_point mean_point(mean_pixel, mean_angle, 0.0);
+      track_means.emplace(it->first, mean_point);
+    }
+
+    // Only update at the end to not mess up iteration and association.
+    std::map<size_t, track_point> track_updates;
+    std::vector<track_point> new_tracks;
+    for (const line& maxima : maxima_list_pos[i]) {
+      // Potential nearest neighbors.
+      std::vector<size_t> potential_matches;
+      for (auto it = track_means.begin(); it != track_means.end(); it++) {
+        if ((std::abs(maxima.r - it->second.pixel) <= tracking_pixel_step) &&
+            (std::abs(maxima.theta_idx - it->second.angle) <= tracking_angle_step)) {
+          potential_matches.emplace_back(it->first);
+        }
+      }
+
+      track_point new_point(maxima.r, maxima.theta_idx, time);
+      if (potential_matches.size() == 0) {
+        new_tracks.emplace_back(new_point);
+      } else {
+        // If multiple tracks might be associated pick the longest one.
+        size_t max_len = 0;
+        size_t max_match = 0;
+        for (const size_t match : potential_matches) {
+          if (tracks[match].size() > max_len) {
+            max_len = tracks[match].size();
+            max_match = match;
+          }
+        }
+        track_updates.emplace(max_match, new_point);
+      }
+    }
+
+    // Add new points to existing tracks if they matched.
+    for (auto it = track_updates.begin(); it != track_updates.end(); it++) {
+      tracks[it->first].emplace_back(it->second);
+    }
+
+    // Discard old tracks that we have no hope of continuing.
+    for (auto it = tracks.begin(); it != tracks.end(); ) {
+      if (it->second.back().time + tracking_max_jump < time) {
+        if (it->second.size() > FLAGS_tracking_min_length) {
+          if (FLAGS_map_output) {
+            map_file << it->second.size() << std::endl;
+            for (size_t j = 0; j < it->second.size(); ++j) {
+              map_file << std::fixed << std::setprecision(12)
+                << it->second[j].time <<  "," 
+                << static_cast<size_t>(it->second[j].pixel) << ","
+                << static_cast<size_t>(it->second[j].angle) << std::endl;
+            }
+          }
+        }
+        it = tracks.erase(it);
+      } else {
+        ++it;
+      }
+    }
+
+    // Create new tracks from points that didn't match existing tracks.
+    for (track_point& new_point : new_tracks) {
+      tracks[next_track_id].emplace_back(new_point);
+      ++next_track_id;
+    }
+  }
+
+  // Calculate statistics
+  const auto kTrackingTime = std::chrono::high_resolution_clock::now();
+  std::chrono::duration<double, std::micro> duration_hough_us =
+      kHoughTime - kStartTime;
+  std::chrono::duration<double, std::micro> duration_tracking_us =
+      kTrackingTime - kHoughTime;
+
+  total_events_timing_us += duration_hough_us.count();
+  total_tracking_timing_ms += duration_tracking_us.count() / 1000.0;
+  total_msgs_timing_ms += duration_hough_us.count() / 1000.0;
+
+  const int num_events = num_points_pos + num_points_neg;
+  total_events += num_events;
+  total_msgs++;
+
+  double elapsed_time = msg->header.stamp.toSec() - start_time;
+
+  LOG(INFO) << detector_name_ << std::fixed << std::setprecision(2)
+            << std::setfill(' ') << " speed: " << std::setw(6)
+            << total_events_timing_us / total_events << " us/event | "
+            << std::setw(6) << total_msgs_timing_ms / total_msgs
+            << " ms/msg | " << std::setw(6) << num_events << " e/msg | "
+            << "tracking: " << total_tracking_timing_ms / total_msgs
+            << " ms/msg | " << "progress " << elapsed_time << " s.";
 }
 
 // Visualizing the current line detections and corresponding Hough space.
