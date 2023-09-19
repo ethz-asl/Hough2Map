@@ -27,7 +27,6 @@ DEFINE_int32(
     show_lines_every_nth, 10, "Event frequency at which to plot the lines.");
 DEFINE_bool(map_output, false, "Export detected poles to file");
 
-DEFINE_bool(odometry_available, true, "A GPS Odometry is available");
 DEFINE_double(
     odometry_event_alignment, 0,
     "Manual time synchronization to compensate misalignment between "
@@ -104,9 +103,6 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
       kHoughAngularResolution);
   hough_nms_radius2_ = FLAGS_hough_nms_radius * FLAGS_hough_nms_radius;
 
-  // Initialize various transformation matrizes.
-  initializeTransformationMatrices();
-
   // Open the input bag.
   rosbag::Bag bag;
   try {
@@ -162,17 +158,6 @@ Detector::~Detector() {
   if (FLAGS_map_output) {
     map_file.close();
   }
-}
-
-void Detector::initializeTransformationMatrices() {
-  // Initialize transformation matrices.
-  // Rotating camera relative to train.
-  C_camera_train_ << 0, -1, 0, 1, 0, 0, 0, 0, 1;
-  // GPS offset to center of train in meters.
-  gps_offset_ << 1, 0, 0, 0, 1, -0.8, 0, 0, 1;
-  // Camera offset to center of train in meters.
-  camera_train_offset_ << 1, 0, -FLAGS_camera_offset_x, 0, 1,
-      FLAGS_camera_offset_y, 0, 0, 1;
 }
 
 // Function to precompute angles, sin and cos values for a vectorized version
@@ -287,61 +272,6 @@ void Detector::computeUndistortionMapping() {
       event_undist_map_y_(j, i) = points_undist[index].y;
       ++index;
     }
-  }
-}
-
-// Processing incoming GPS position data.
-void Detector::positionCallback(const custom_msgs::positionEstimate msg) {
-  utm_coordinate current_position_utm = deg2utm(msg.latitude, msg.longitude);
-
-  // Add raw_gps to current raw_gps buffer (with alighment for manual odometry
-  // to DVS synchronization).
-  const double kAlignedTimestamp =
-      msg.header.stamp.toSec() + FLAGS_odometry_event_alignment;
-  Eigen::Vector3d current_position_txy;
-  current_position_txy[0] = kAlignedTimestamp;
-  current_position_txy[1] = current_position_utm.x;
-  current_position_txy[2] = current_position_utm.y;
-  raw_gps_buffer_.push_back(current_position_txy);
-
-  while (kAlignedTimestamp - raw_gps_buffer_.front()[0] > FLAGS_buffer_size_s) {
-    raw_gps_buffer_.pop_front();
-  }
-}
-
-// Processing velocity data and storing in buffer.
-void Detector::velocityCallback(const custom_msgs::velocityEstimate msg) {
-  // Manually synchronizing DVS to odometry timestamps.
-  const double kAlignedTimestamp =
-      msg.header.stamp.toSec() + FLAGS_odometry_event_alignment;
-  // Add velocity to current velocity buffer.
-  Eigen::Vector3d current_velocity_ten;
-  current_velocity_ten[0] = kAlignedTimestamp;
-  current_velocity_ten[1] = msg.velE;
-  current_velocity_ten[2] = msg.velN;
-  velocity_buffer_.push_back(current_velocity_ten);
-
-  while (kAlignedTimestamp - velocity_buffer_.front()[0] >
-         FLAGS_buffer_size_s) {
-    velocity_buffer_.pop_front();
-  }
-}
-
-void Detector::orientationCallback(const custom_msgs::orientationEstimate msg) {
-  double yaw = msg.yaw * M_PI / 180.0;
-
-  // Add orientation to current orientation buffer with manual time stamp
-  // synchronization.
-  const double kAlignedTimestamp =
-      msg.header.stamp.toSec() + FLAGS_odometry_event_alignment;
-  Eigen::Vector2d cur_orient;
-  cur_orient[0] = kAlignedTimestamp;
-  cur_orient[1] = yaw;
-  orientation_buffer_.push_back(cur_orient);
-
-  while (kAlignedTimestamp - orientation_buffer_.front()[0] >
-         FLAGS_buffer_size_s) {
-    orientation_buffer_.pop_front();
   }
 }
 

@@ -129,17 +129,9 @@ class Detector {
   ros::Subscriber event_sub_;
   ros::Subscriber image_raw_sub_;
 
-  ros::Subscriber GPS_pos_;
-  ros::Subscriber GPS_orient_;
-  ros::Subscriber GPS_vel_;
-
-  /* Function definitions. */
-
   // Callback functions for subscribers.
   void eventCallback(const dvs_msgs::EventArray::ConstPtr& msg);
-  void positionCallback(const custom_msgs::positionEstimate msg);
-  void velocityCallback(const custom_msgs::velocityEstimate msg);
-  void orientationCallback(const custom_msgs::orientationEstimate msg);
+  void imageCallback(const sensor_msgs::Image::ConstPtr& msg);
 
   // Functions for Hough transform computation.
   void stepHoughTransform(
@@ -182,11 +174,9 @@ class Detector {
 
   // Initialisation functions.
   void computeUndistortionMapping();
-  void initializeTransformationMatrices();
   void loadCalibration();
 
   // Odometry processing functions.
-  utm_coordinate deg2utm(double la, double lo);
   template <class S, int rows, int cols>
   Eigen::Matrix<S, rows, cols> queryOdometryBuffer(
       const double query_time,
@@ -195,7 +185,6 @@ class Detector {
   // Visualization functions.
   void drawPolarCorLine(
       cv::Mat& image_space, float rho, float theta, cv::Scalar color) const;
-  void imageCallback(const sensor_msgs::Image::ConstPtr& msg);
   void visualizeCurrentLineDetections(
       bool polarity, const Eigen::MatrixXf& points, 
       const std::vector<std::vector<Detector::line>>& maxima_list,
@@ -211,16 +200,6 @@ class Detector {
   Eigen::MatrixXf last_points_neg;
   Eigen::VectorXd last_times_pos;
   Eigen::VectorXd last_times_neg;
-  
-  // Odometry.
-  std::deque<Eigen::Vector3d> raw_gps_buffer_;
-  std::deque<Eigen::Vector3d> velocity_buffer_;
-  std::deque<Eigen::Vector2d> orientation_buffer_;
-
-  // Transformation matrix (in [m]) between train and sensors for triangulation.
-  Eigen::Matrix3d C_camera_train_;
-  Eigen::Matrix3d gps_offset_;
-  Eigen::Matrix3d camera_train_offset_;
 
   // Image to display the events on for visualization purposes only.
   cv::Mat cur_greyscale_img_;
