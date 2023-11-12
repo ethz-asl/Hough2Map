@@ -1,0 +1,19 @@
+<launch>
+  <!-- rosbag playback -->
+  <arg name="bag"/>
+
+  <!-- mapping pipeline -->
+  <node name="hough2map" pkg="hough2map" type="hough2map" output="screen">
+    <param name="rosbag_path" value="$(arg bag)"/>
+    <param name="dvs_calibration" value="dvxplorer.yaml"/>
+    <param name="pixel_calibration" value="dvxplorer_pixels.txt"/>
+    <param name="image_topic" value=""/>
+
+    <param name="hough_window_size" value="8000"/>
+    <param name="hough_threshold" value="60"/>
+    <param name="map_output" value="true"/>
+    <param name="show_lines_in_video" value="true"/>
+    <param name="show_lines_every_nth" value="2500"/>
+    <param name="hough_nms_radius" value="12"/>
+  </node>
+</launch>
