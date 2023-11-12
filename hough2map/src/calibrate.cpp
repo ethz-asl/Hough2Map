@@ -123,8 +123,8 @@ int main(int argc, char *argv[]) {
 
   pixels_file << num_bad << std::endl;
   for (size_t i = 0; i < num_bad; ++i) {
-    size_t x = indices[i] % image_height_;
-    size_t y = indices[i] / image_height_;
+    size_t x = indices[i] / image_height_;
+    size_t y = indices[i] % image_height_;
     pixels_file << x << "," << y << std::endl;
   }
   pixels_file.close();
