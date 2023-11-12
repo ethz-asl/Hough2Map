@@ -16,5 +16,9 @@ cs_add_library(${PROJECT_NAME}_lib
 
 target_link_libraries(${PROJECT_NAME} ${PROJECT_NAME}_lib)
 
+cs_add_executable(calibrate
+  src/calibrate.cpp
+)
+
 cs_install()
 cs_export()
