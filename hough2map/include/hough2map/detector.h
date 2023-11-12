@@ -61,28 +61,6 @@ class Detector {
     int theta_idx;
   };
 
-  // Struct for describing a tracked pole.
-  struct pole {
-    double rho;
-    double theta;
-    double t_enter;
-    double t_leave;
-    double t_center;
-    double speed;
-    int ID;
-    bool polarity;
-    double pos_x;
-    double pos_y;
-    double first_observed;
-    float weight;
-  };
-
-  struct utm_coordinate {
-    double x;
-    double y;
-    std::string zone;
-  };
-
   // File Output.
   const char* map_file_path = "/tmp/map.txt";
   std::ofstream map_file;
@@ -122,6 +100,9 @@ class Detector {
   cv::Mat image_undist_map_y_;
   Eigen::MatrixXf event_undist_map_x_;
   Eigen::MatrixXf event_undist_map_y_;
+
+  bool filter_dead_pixels_;
+  std::vector<bool> is_dead_pixel_;
 
   // ROS interface.
   ros::NodeHandle nh_;

@@ -7,9 +7,11 @@
 
 DEFINE_string(rosbag_path, "", "Rosbag to process.");
 DEFINE_string(event_topic, "/dvs/events", "Topic for event messages.");
-DEFINE_string(image_topic, "/dvs/image_raw", "Topic for image messages.");
+DEFINE_string(image_topic, "", "Topic for image messages.");
 DEFINE_string(
     dvs_calibration, "calibration.yaml", "Camera parameters for the DVS.");
+DEFINE_string(
+    pixel_calibration, "", "List of dead pixels on the DVS.");
 
 DEFINE_int32(
     hough_threshold, 15, "Threshold for the first level Hough transform.");
@@ -76,9 +78,7 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   // Output file for the map data.
   if (FLAGS_map_output) {
     map_file.open(map_file_path);
-    if (!map_file.is_open()) {
-      LOG(FATAL) << "Could not open file:" << map_file_path << std::endl;
-    }
+    CHECK(map_file.is_open());
   }
 
   debug_file.open(debug_file_path);
@@ -92,6 +92,7 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   total_msgs = 0;
 
   // Import calibration file.
+  filter_dead_pixels_ = false;
   loadCalibration();
 
   // Compute undistortion for given camera parameters.
@@ -124,6 +125,9 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
 
     cv::namedWindow("Detected lines (pos)", cv::WINDOW_NORMAL);
     cv::namedWindow("Detected lines (neg)", cv::WINDOW_NORMAL);
+  }
+
+  if (!FLAGS_image_topic.empty()) {
     cv::namedWindow("Camera image", cv::WINDOW_NORMAL);
     topics.emplace_back(FLAGS_image_topic);
   }
@@ -227,6 +231,35 @@ void Detector::loadCalibration() {
   for (; it != it_end; ++it) {
     distortion_coeffs_[i] = (*it).real();
     i++;
+  }
+
+  // Load list of dead pixels on the DVS, if one is provided.
+  if (!FLAGS_pixel_calibration.empty()) {
+    filter_dead_pixels_ = true;
+
+    std::string pixels_file_path =
+      package_path + "/share/" + FLAGS_pixel_calibration;
+    std::ifstream pixels_file(pixels_file_path);
+    CHECK(pixels_file.is_open());
+
+    // Allocate lookup table space.
+    is_dead_pixel_.resize(
+        camera_resolution_width_ * camera_resolution_height_);
+    std::fill(is_dead_pixel_.begin(), is_dead_pixel_.end(), false);
+
+    // Read in all the dead pixels from file.
+    size_t num_dead_pixels;
+    pixels_file >> num_dead_pixels;
+
+    char comma;
+    uint16_t x, y;
+    for (size_t i = 0; i < num_dead_pixels; ++i) {
+      pixels_file >> x >> comma >> y;
+      size_t index = x * camera_resolution_height_ + y;
+      is_dead_pixel_[index] = true;
+    }
+
+    pixels_file.close();
   }
 }
 
@@ -348,10 +381,10 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   std::vector<size_t> maxima_change_pos;
   std::vector<size_t> maxima_change_neg;
 
-  stepHoughTransform(
-      points_pos, hough_space_pos, &last_maxima_pos, initialized,
-      &maxima_list_pos, &maxima_change_pos);
   // stepHoughTransform(
+  //     points_pos, hough_space_pos, &last_maxima_pos, initialized,
+  //     &maxima_list_pos, &maxima_change_pos);
+  // // stepHoughTransform(
   //     points_neg, hough_space_neg, &last_maxima_neg, initialized,
   //     &maxima_list_neg, &maxima_change_neg);
   initialized = true;
@@ -381,7 +414,7 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   }
 
   // Greedy heuristic for line tracking
-  for (size_t i = 1; i < maxima_list_pos.size(); i++) {
+  /*for (size_t i = 1; i < maxima_list_pos.size(); i++) {
     double time = times_pos(maxima_change_pos[i - 1]);
 
     // Get sliding mean of tracking head
@@ -462,7 +495,7 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
       tracks[next_track_id].emplace_back(new_point);
       ++next_track_id;
     }
-  }
+  }*/
 
   // Calculate statistics
   const auto kTrackingTime = std::chrono::high_resolution_clock::now();
@@ -512,9 +545,6 @@ void Detector::visualizeCurrentLineDetections(
     cv::Mat vis_frame(
         cv::Size(camera_resolution_width_, camera_resolution_height_), CV_8UC3,
         cv::Scalar(255, 255, 255));
-    /*cv::remap(
-        cur_greyscale_img_, vis_frame, image_undist_map_x_,
-        image_undist_map_y_, cv::INTER_LINEAR);*/
 
     for (size_t j = i - FLAGS_hough_window_size + 1; j <= i; j++) {
       uint32_t x = static_cast<uint32_t>(points(0, j));
@@ -522,14 +552,14 @@ void Detector::visualizeCurrentLineDetections(
       vis_frame.at<cv::Vec3b>(y, x) = color_vec3b;
     }
 
-    if ((maxima_index < maxima_change.size()) &&
+    /*if ((maxima_index < maxima_change.size()) &&
         (i >= maxima_change[maxima_index])) {
       ++maxima_index;
     }
 
     for (auto& maxima : maxima_list[maxima_index]) {
       drawPolarCorLine(vis_frame, maxima.r, maxima.theta, color_scalar);
-    }
+    }*/
 
     cv::imshow(cv_window, vis_frame);
     cv::waitKey(1);
@@ -925,16 +955,18 @@ void Detector::eventPreProcessing(
   // Preprocess events and potentially subsample.
   int count_pos = num_last_points_pos;
   int count_neg = num_last_points_neg;
+  size_t filtered = 0;
   for (int i = 0; i < num_events; i += FLAGS_event_subsample_factor) {
     const dvs_msgs::Event& e = orig_msg->events[i];
 
-    // Seemingly broken pixels in the DVS (millions of exactly equal events at
-    // once at random). This needs to be adapted if you use another device.
-    /*if (((e.x == 19) && (e.y == 18)) || ((e.x == 43) && (e.y == 72)) ||
-        ((e.x == 89) && (e.y == 52)) || ((e.x == 25) && (e.y == 42)) ||
-        ((e.x == 61) && (e.y == 71)) || ((e.x == 37) && (e.y == 112))) {
-      continue;
-    }*/
+    // Filter out for dead pixels in the DVS.
+    if (filter_dead_pixels_) {
+      size_t index = e.x * camera_resolution_height_ + e.y;
+      if (is_dead_pixel_[index]) {
+        ++filtered;
+        continue;
+      }
+    }
 
     double time = e.ts.toSec();
 
@@ -969,6 +1001,8 @@ void Detector::eventPreProcessing(
       count_neg++;
     }
   }
+
+  LOG(INFO) << "Filtered " << filtered << " dead pixels.";
 
   points_pos->conservativeResize(2, count_pos);
   points_neg->conservativeResize(2, count_neg);
