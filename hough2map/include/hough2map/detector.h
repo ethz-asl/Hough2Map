@@ -150,8 +150,7 @@ class Detector {
 
   void eventPreProcessing(
       const dvs_msgs::EventArray::ConstPtr& orig_msg,
-      Eigen::MatrixXf* points_pos, Eigen::MatrixXf* points_neg,
-      Eigen::VectorXd* times_pos, Eigen::VectorXd* times_neg);
+      Eigen::MatrixXf* points, Eigen::VectorXd* times);
 
   // Initialisation functions.
   void computeUndistortionMapping();
@@ -165,22 +164,18 @@ class Detector {
 
   // Visualization functions.
   void drawPolarCorLine(
-      cv::Mat& image_space, float rho, float theta, cv::Scalar color) const;
+      cv::Mat& image_space, float rho, float  theta, cv::Scalar color) const;
   void visualizeCurrentLineDetections(
-      bool polarity, const Eigen::MatrixXf& points, 
+      const Eigen::MatrixXf& points,
       const std::vector<std::vector<Detector::line>>& maxima_list,
       const std::vector<size_t>& maxima_change) const;
 
   // For the very first message we need separate processing (e.g. a full HT).
   bool initialized;
-  MatrixHough hough_space_pos;
-  MatrixHough hough_space_neg;
-  std::vector<Detector::line> last_maxima_pos;
-  std::vector<Detector::line> last_maxima_neg;
-  Eigen::MatrixXf last_points_pos;
-  Eigen::MatrixXf last_points_neg;
-  Eigen::VectorXd last_times_pos;
-  Eigen::VectorXd last_times_neg;
+  MatrixHough hough_space;
+  std::vector<Detector::line> last_maxima;
+  Eigen::MatrixXf last_points;
+  Eigen::VectorXd last_times;
 
   // Image to display the events on for visualization purposes only.
   cv::Mat cur_greyscale_img_;

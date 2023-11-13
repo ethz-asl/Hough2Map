@@ -29,16 +29,6 @@ DEFINE_int32(
     show_lines_every_nth, 10, "Event frequency at which to plot the lines.");
 DEFINE_bool(map_output, false, "Export detected poles to file");
 
-DEFINE_double(
-    odometry_event_alignment, 0,
-    "Manual time synchronization to compensate misalignment between "
-    "odometry and DVS timestamps");
-DEFINE_double(camera_offset_x, 0, "Camera offset along the train axis");
-DEFINE_double(
-    camera_offset_y, 0,
-    "Camera offset perpendicular to the left of the train axis");
-DEFINE_double(buffer_size_s, 30, "Size of the odometry buffer in seconds");
-
 DEFINE_int32(tracking_angle_step, 3, "");
 DEFINE_int32(tracking_pixel_step, 5, "");
 DEFINE_double(tracking_max_jump, 0.4, "");
@@ -57,7 +47,6 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   // Checking that flags have reasonable values.
   CHECK_GE(FLAGS_hough_window_size, 1);
   CHECK_GT(FLAGS_event_subsample_factor, 0);
-  CHECK_GE(FLAGS_buffer_size_s, 1);
   CHECK_GT(FLAGS_hough_threshold, 0);
   CHECK(!FLAGS_rosbag_path.empty());
 
@@ -70,10 +59,8 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
 
   // Set initial status to false until first message is processed.
   initialized = false;
-  last_points_pos.resize(2, 0);
-  last_points_neg.resize(2, 0);
-  last_times_pos.resize(0);
-  last_times_neg.resize(0);
+  last_points.resize(2, 0);
+  last_times.resize(0);
 
   // Output file for the map data.
   if (FLAGS_map_output) {
@@ -122,9 +109,7 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
     LOG(WARNING)
         << "Visualization can be very slow, especially when using low values "
         << "for --show_lines_every_nth.";
-
-    cv::namedWindow("Detected lines (pos)", cv::WINDOW_NORMAL);
-    cv::namedWindow("Detected lines (neg)", cv::WINDOW_NORMAL);
+    cv::namedWindow("Detected circles", cv::WINDOW_NORMAL);
   }
 
   if (!FLAGS_image_topic.empty()) {
@@ -352,23 +337,18 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   }
 
   // Reshaping the event array into an Eigen matrix.
-  Eigen::MatrixXf points_pos, points_neg;
-  Eigen::VectorXd times_pos, times_neg;
-  eventPreProcessing(msg, &points_pos, &points_neg, &times_pos, &times_neg);
+  Eigen::MatrixXf points;
+  Eigen::VectorXd times;
+  eventPreProcessing(msg, &points, &times);
 
   // The new points will now be the next old points.
-  const int num_points_pos = points_pos.cols();
-  const int num_points_neg = points_neg.cols();
-  const int keep_pos = std::min(FLAGS_hough_window_size, num_points_pos);
-  const int keep_neg = std::min(FLAGS_hough_window_size, num_points_neg);
-  last_points_pos = points_pos.block(0, num_points_pos - keep_pos, 2, keep_pos);
-  last_points_neg = points_neg.block(0, num_points_neg - keep_neg, 2, keep_neg);
-  last_times_pos = times_pos.segment(num_points_pos - keep_pos, keep_pos);
-  last_times_neg = times_neg.segment(num_points_neg - keep_neg, keep_neg);
+  const int num_points = points.cols();
+  const int keep = std::min(FLAGS_hough_window_size, num_points);
+  last_points = points.block(0, num_points - keep, 2, keep);
+  last_times = times.segment(num_points - keep, keep);
 
   // Wait until we have enough points to initialize.
-  if (num_points_pos < FLAGS_hough_window_size ||
-      num_points_neg < FLAGS_hough_window_size) {
+  if (num_points < FLAGS_hough_window_size) {
     return;
   }
 
@@ -376,27 +356,22 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   // the active set of maxima in the Hough Space. These are basically the line
   // detections at each timestep. This whole storage is pre-initialized to
   // make it ready for parallelizing the whole process.
-  std::vector<std::vector<Detector::line>> maxima_list_pos;
-  std::vector<std::vector<Detector::line>> maxima_list_neg;
-  std::vector<size_t> maxima_change_pos;
-  std::vector<size_t> maxima_change_neg;
+  std::vector<std::vector<Detector::line>> maxima_list;
+  std::vector<size_t> maxima_change;
 
   // stepHoughTransform(
-  //     points_pos, hough_space_pos, &last_maxima_pos, initialized,
-  //     &maxima_list_pos, &maxima_change_pos);
-  // // stepHoughTransform(
-  //     points_neg, hough_space_neg, &last_maxima_neg, initialized,
-  //     &maxima_list_neg, &maxima_change_neg);
+  //     points, hough_space, &last_maxima, initialized,
+  //     &maxima_list, &maxima_change);
   initialized = true;
 
   // Dump detected maxima to file
   /*if (FLAGS_map_output) {
-    for (size_t i = 1; i < maxima_list_pos.size(); ++i) {
-      const size_t event_index = maxima_change_pos[i - 1];
+    for (size_t i = 1; i < maxima_list.size(); ++i) {
+      const size_t event_index = maxima_change[i - 1];
       map_file 
-          << std::fixed << std::setprecision(12) << times_pos(event_index)
-          << "," << maxima_list_pos[i].size() << std::endl;
-      for (const line& maxima : maxima_list_pos[i]) {
+          << std::fixed << std::setprecision(12) << times(event_index)
+          << "," << maxima_list[i].size() << std::endl;
+      for (const line& maxima : maxima_list[i]) {
         map_file << maxima.r << "," << maxima.theta_idx << std::endl;
       }
     }
@@ -408,14 +383,12 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   // NOTE: This slows everything down by a very large margin
   if (FLAGS_show_lines_in_video) {
     visualizeCurrentLineDetections(
-        true, points_pos, maxima_list_pos, maxima_change_pos);
-    // visualizeCurrentLineDetections(
-    //     false, points_neg, maxima_list_neg, maxima_change_neg);
+        points, maxima_list, maxima_change);
   }
 
   // Greedy heuristic for line tracking
-  /*for (size_t i = 1; i < maxima_list_pos.size(); i++) {
-    double time = times_pos(maxima_change_pos[i - 1]);
+  /*for (size_t i = 1; i < maxima_list.size(); i++) {
+    double time = times(maxima_change[i - 1]);
 
     // Get sliding mean of tracking head
     std::map<size_t, track_point> track_means;
@@ -438,7 +411,7 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
     // Only update at the end to not mess up iteration and association.
     std::map<size_t, track_point> track_updates;
     std::vector<track_point> new_tracks;
-    for (const line& maxima : maxima_list_pos[i]) {
+    for (const line& maxima : maxima_list[i]) {
       // Potential nearest neighbors.
       std::vector<size_t> potential_matches;
       for (auto it = track_means.begin(); it != track_means.end(); it++) {
@@ -508,8 +481,7 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   total_tracking_timing_ms += duration_tracking_us.count() / 1000.0;
   total_msgs_timing_ms += duration_hough_us.count() / 1000.0;
 
-  const int num_events = num_points_pos + num_points_neg;
-  total_events += num_events;
+  total_events += num_points;
   total_msgs++;
 
   double elapsed_time = msg->header.stamp.toSec() - start_time;
@@ -518,25 +490,21 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
             << std::setfill(' ') << " speed: " << std::setw(6)
             << total_events_timing_us / total_events << " us/event | "
             << std::setw(6) << total_msgs_timing_ms / total_msgs
-            << " ms/msg | " << std::setw(6) << num_events << " e/msg | "
+            << " ms/msg | " << std::setw(6) << num_points << " e/msg | "
             << "tracking: " << total_tracking_timing_ms / total_msgs
             << " ms/msg | " << "progress " << elapsed_time << " s.";
 }
 
 // Visualizing the current line detections and corresponding Hough space.
 void Detector::visualizeCurrentLineDetections(
-    bool polarity, const Eigen::MatrixXf& points, 
+    const Eigen::MatrixXf& points, 
     const std::vector<std::vector<hough2map::Detector::line>>& maxima_list,
     const std::vector<size_t>& maxima_change) const {
   const int num_events = points.cols();
 
   // Predefined colors and strings
-  const cv::Scalar color_scalar = 
-      polarity ? cv::Scalar(0, 0, 255) : cv::Scalar(255, 0, 0);
-  const cv::Vec3b color_vec3b = 
-      polarity ? cv::Vec3b(0, 0, 255) : cv::Vec3b(255, 0, 0);
-  const std::string cv_window =
-      polarity ? "Detected lines (pos)" : "Detected lines (neg)";
+  const cv::Scalar color_scalar = cv::Scalar(0, 0, 255);
+  const cv::Vec3b color_vec3b = cv::Vec3b(0, 0, 255);
 
   // Getting the horizontal positions of all vertical line detections.
   size_t maxima_index = 0;
@@ -561,8 +529,8 @@ void Detector::visualizeCurrentLineDetections(
       drawPolarCorLine(vis_frame, maxima.r, maxima.theta, color_scalar);
     }*/
 
-    cv::imshow(cv_window, vis_frame);
-    cv::waitKey(1);
+    cv::imshow("Detected circles", vis_frame);
+    cv::waitKey(50);
   }
 }
 
@@ -916,45 +884,22 @@ void Detector::computeFullHoughSpace(
 // Event preprocessing prior to first HT.
 void Detector::eventPreProcessing(
     const dvs_msgs::EventArray::ConstPtr& orig_msg,
-    Eigen::MatrixXf* points_pos, Eigen::MatrixXf* points_neg,
-    Eigen::VectorXd* times_pos, Eigen::VectorXd* times_neg) {
+    Eigen::MatrixXf* points, Eigen::VectorXd* times) {
   const int num_events = orig_msg->events.size();
 
   // How many points do we carry over from previous messages.
-  const int num_last_points_pos = last_points_pos.cols();
-  const int num_last_points_neg = last_points_neg.cols();
+  const int num_last_points = last_points.cols();
 
   // Preallocate more space than needed.
-  points_pos->resize(2, num_events + num_last_points_pos);
-  points_neg->resize(2, num_events + num_last_points_neg);
-  times_pos->resize(num_events + num_last_points_pos);
-  times_neg->resize(num_events + num_last_points_neg);
+  points->resize(2, num_events + num_last_points);
+  times->resize(num_events + num_last_points);
 
   // Concatenate previous points with the new ones.
-  points_pos->block(0, 0, 2, num_last_points_pos) = last_points_pos;
-  points_neg->block(0, 0, 2, num_last_points_neg) = last_points_neg;
-  times_pos->segment(0, num_last_points_pos) = last_times_pos;
-  times_neg->segment(0, num_last_points_neg) = last_times_neg;
-
-  // Filter grid and initialization
-  const size_t grid_size = 8;
-  const size_t max_events = 8;
-  const double event_ttl = 0.005;
-  std::queue<double> filter_grid[480 / grid_size][640 / grid_size];
-  for (int i = 0; i < num_last_points_pos; ++i) {
-    size_t grid_x = last_points_pos(0, i) / grid_size;
-    size_t grid_y = last_points_pos(1, i) / grid_size;
-    filter_grid[grid_y][grid_x].push(last_times_pos(i));
-  }
-  for (int i = 0; i < num_last_points_neg; ++i) {
-    size_t grid_x = last_points_neg(0, i) / grid_size;
-    size_t grid_y = last_points_neg(1, i) / grid_size;
-    filter_grid[grid_y][grid_x].push(last_times_neg(i));
-  }
+  points->block(0, 0, 2, num_last_points) = last_points;
+  times->segment(0, num_last_points) = last_times;
 
   // Preprocess events and potentially subsample.
-  int count_pos = num_last_points_pos;
-  int count_neg = num_last_points_neg;
+  int count = num_last_points;
   size_t filtered = 0;
   for (int i = 0; i < num_events; i += FLAGS_event_subsample_factor) {
     const dvs_msgs::Event& e = orig_msg->events[i];
@@ -973,41 +918,17 @@ void Detector::eventPreProcessing(
     // Undistort events based on camera calibration.
     float x = event_undist_map_x_(e.y, e.x);
     float y = event_undist_map_y_(e.y, e.x);
-
-    size_t grid_x = x / grid_size;
-    size_t grid_y = y / grid_size;
-    while (!filter_grid[grid_y][grid_x].empty() && 
-        filter_grid[grid_y][grid_x].front() + event_ttl < time) {
-      filter_grid[grid_y][grid_x].pop();
-    }
-
-    if (filter_grid[grid_y][grid_x].size() < max_events) {
-      filter_grid[grid_y][grid_x].push(time);
-    } else {
-      continue;
-    }
     
-    // Sort by polarity as we calculate two separate HTs, since lines are
-    // usually one homogeneous transition in intensity across.
-    if (e.polarity) {
-      (*points_pos)(0, count_pos) = x;
-      (*points_pos)(1, count_pos) = y;
-      (*times_pos)(count_pos) = time;
-      count_pos++;
-    } else {
-      (*points_neg)(0, count_neg) = x;
-      (*points_neg)(1, count_neg) = y;
-      (*times_neg)(count_neg) = time;
-      count_neg++;
-    }
+    (*points)(0, count) = x;
+    (*points)(1, count) = y;
+    (*times)(count) = time;
+    count++;
   }
 
   LOG(INFO) << "Filtered " << filtered << " dead pixels.";
 
-  points_pos->conservativeResize(2, count_pos);
-  points_neg->conservativeResize(2, count_neg);
-  times_pos->conservativeResize(count_pos);
-  times_neg->conservativeResize(count_neg);
+  points->conservativeResize(2, count);
+  times->conservativeResize(count);
 }
 
 void Detector::drawPolarCorLine(
