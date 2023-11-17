@@ -1,32 +1,46 @@
 #ifndef HOUGH2MAP_DETECTOR_H_
 #define HOUGH2MAP_DETECTOR_H_
 
-#include <custom_msgs/orientationEstimate.h>
-#include <custom_msgs/positionEstimate.h>
-#include <custom_msgs/velocityEstimate.h>
 #include <dvs_msgs/Event.h>
 #include <dvs_msgs/EventArray.h>
-#include <geometry_msgs/PoseArray.h>
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/image_encodings.h>
-
 #include <Eigen/Dense>
-#include <cmath>
 #include <cv_bridge/cv_bridge.h>
-#include <deque>
-#include <queue>
-#include <map>
-#include <fstream>
-#include <sstream>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
-#include <iostream>
 #include <opencv2/calib3d.hpp>
 #include <opencv2/core/eigen.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
+
+#include <cmath>
+#include <cstring>
+#include <deque>
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <queue>
+#include <map>
 #include <vector>
+
+// General Parameters
+constexpr size_t kHough2PowDivisor = 0;
+constexpr size_t kHoughSpaceHeight = 480 >> kHough2PowDivisor;
+constexpr size_t kHoughSpaceWidth = 640 >> kHough2PowDivisor;
+
+constexpr size_t kHoughMinRadius = 8 >> kHough2PowDivisor;
+constexpr size_t kHoughMaxRadius = kHoughMinRadius + (256 >> kHough2PowDivisor);
+constexpr size_t kHoughRadiusStep = 8 >> kHough2PowDivisor;
+constexpr size_t kHoughSpaceRadius = (kHoughMaxRadius - kHoughMinRadius) / kHoughRadiusStep;
+
+constexpr int32_t kGradientNN = 4;
+constexpr int32_t kGradientMinPoints = 8;
+constexpr float kGradientMinEigenRatio = 1.5;
+
+constexpr size_t kMaxTimeToLive = 100;
+constexpr size_t kMaxEventRate = 10 * kMaxTimeToLive;
 
 namespace hough2map {
 class Detector {
@@ -74,7 +88,7 @@ class Detector {
   uint64_t total_events;
   uint64_t total_msgs;
 
-  // General Parameters for 1st Hough Transform.
+  // DEPRECATED
   static const int kHoughRadiusResolution = 640;
   static const int kHoughAngularResolution = 21;
   static const int kHoughMinAngle = -5;
@@ -87,8 +101,13 @@ class Detector {
   int hough_nms_radius2_;
 
   // Hough transform objects.
-  typedef Eigen::Matrix<int, kHoughRadiusResolution, kHoughAngularResolution>
-      MatrixHough;
+  typedef size_t HoughMatrix[
+        kHoughSpaceHeight][kHoughSpaceWidth][kHoughSpaceRadius];
+  typedef size_t (*HoughMatrixPtr)[kHoughSpaceWidth][kHoughSpaceRadius];
+  typedef size_t HoughImage[
+        kHoughSpaceHeight + 2 * kGradientNN][
+                kHoughSpaceWidth + 2 * kGradientNN];
+  typedef size_t (*HoughImagePtr)[kHoughSpaceWidth + 2 * kGradientNN];
 
   int camera_resolution_width_;
   int camera_resolution_height_;
@@ -116,13 +135,14 @@ class Detector {
 
   // Functions for Hough transform computation.
   void stepHoughTransform(
-      const Eigen::MatrixXf& points, MatrixHough& hough_space,
-      std::vector<Detector::line> *last_maxima, bool initialized,
+      const std::vector<std::vector<size_t>>& points,
+      HoughMatrixPtr hough_space, std::vector<bool> *has_gradient,
+      std::vector<line> *last_maxima, bool initialized,
       std::vector<std::vector<Detector::line>>* maxima_list,
       std::vector<size_t>* maxima_change);
 
   void addMaximaInRadius(
-      int angle, int radius, const MatrixHough& hough_space,
+      int angle, int radius, const HoughMatrix& hough_space,
       std::vector<Detector::line>* new_maxima,
       std::vector<int>* new_maxima_value, bool skip_center = false);
   void applySuppressionRadius(
@@ -138,44 +158,45 @@ class Detector {
   void newPoleDetection(double rho, double theta, double window_time, bool pol);
 
   void computeFullHoughSpace(
-      size_t index, MatrixHough& hough_space, const Eigen::MatrixXi& radii);
+      size_t index, HoughMatrix& hough_space, const Eigen::MatrixXi& radii);
 
   void computeFullNMS(
-      const MatrixHough& hough_space, std::vector<Detector::line> *maxima);
+      const HoughMatrix& hough_space, std::vector<Detector::line> *maxima);
   void iterativeNMS(
-      const Eigen::MatrixXf& points, MatrixHough& hough_space, 
+      const Eigen::MatrixXf& points, HoughMatrix& hough_space, 
       const Eigen::MatrixXi& radii,
       std::vector<std::vector<Detector::line>>* maxima_list,
       std::vector<size_t>* maxima_change);
 
   void eventPreProcessing(
       const dvs_msgs::EventArray::ConstPtr& orig_msg,
-      Eigen::MatrixXf* points, Eigen::VectorXd* times);
+      std::vector<std::vector<size_t>>* points, std::vector<double>* times);
 
   // Initialisation functions.
   void computeUndistortionMapping();
   void loadCalibration();
 
-  // Odometry processing functions.
-  template <class S, int rows, int cols>
-  Eigen::Matrix<S, rows, cols> queryOdometryBuffer(
-      const double query_time,
-      const std::deque<Eigen::Matrix<S, rows, cols>>& odometry_buffer);
-
   // Visualization functions.
   void drawPolarCorLine(
       cv::Mat& image_space, float rho, float  theta, cv::Scalar color) const;
   void visualizeCurrentLineDetections(
-      const Eigen::MatrixXf& points,
+      const std::vector<std::vector<size_t>>& points,
       const std::vector<std::vector<Detector::line>>& maxima_list,
       const std::vector<size_t>& maxima_change) const;
 
   // For the very first message we need separate processing (e.g. a full HT).
   bool initialized;
-  MatrixHough hough_space;
+
+  HoughMatrixPtr hough_space;
+  HoughImagePtr nn_lookup;
+
   std::vector<Detector::line> last_maxima;
-  Eigen::MatrixXf last_points;
-  Eigen::VectorXd last_times;
+  std::vector<std::vector<size_t>> last_points;
+  std::vector<double> last_times;
+  std::vector<bool> last_has_gradient;
+
+  size_t num_messages;
+  std::queue<size_t> (*filter_grid_)[kHoughSpaceWidth];
 
   // Image to display the events on for visualization purposes only.
   cv::Mat cur_greyscale_img_;
