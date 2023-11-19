@@ -26,18 +26,12 @@
 #include <vector>
 
 // General Parameters
-constexpr size_t kHough2PowDivisor = 0;
-constexpr size_t kHoughSpaceHeight = 480 >> kHough2PowDivisor;
-constexpr size_t kHoughSpaceWidth = 640 >> kHough2PowDivisor;
+constexpr size_t kHoughSpaceHeight = 480;
+constexpr size_t kHoughSpaceWidth = 640;
 
-constexpr size_t kHoughMinRadius = 8 >> kHough2PowDivisor;
-constexpr size_t kHoughMaxRadius = kHoughMinRadius + (256 >> kHough2PowDivisor);
-constexpr size_t kHoughRadiusStep = 8 >> kHough2PowDivisor;
-constexpr size_t kHoughSpaceRadius = (kHoughMaxRadius - kHoughMinRadius) / kHoughRadiusStep;
-
-constexpr int32_t kGradientNN = 4;
-constexpr int32_t kGradientMinPoints = 8;
-constexpr float kGradientMinEigenRatio = 1.5;
+constexpr size_t kHoughMinRadius = 8;
+constexpr size_t kHoughMaxRadius = 32;
+constexpr size_t kHoughSpaceRadius = kHoughMaxRadius - kHoughMinRadius + 1;
 
 constexpr size_t kMaxTimeToLive = 100;
 constexpr size_t kMaxEventRate = 10 * kMaxTimeToLive;
@@ -53,26 +47,40 @@ class Detector {
   std::string detector_name_ = "Hough";
 
  private:
-  // Struct for describing a detected line.
-  struct line {
-    line(int _r, float _theta, int _theta_idx) :
-        r(_r), theta(_theta), theta_idx(_theta_idx) {}
+  // Struct for describing a detected circle.
+  struct circle {
+    circle(int32_t _x, int32_t _y, int32_t _r) :
+        x(_x), y(_y), r(_r) {}
 
-    bool operator==(const line& other) const {
-      return (r == other.r) && (theta_idx == other.theta_idx);
+    bool operator==(const circle& other) const {
+      return (x == other.x) && (y == other.y) && (r == other.r);
     }
 
-    bool operator!=(const line& other) const {
+    bool operator!=(const circle& other) const {
       return !operator==(other);
     }
 
-    bool operator<(const line& other) const {
-        return (r != other.r) ? r < other.r : theta_idx < other.theta_idx;
+    bool operator<(const circle& other) const {
+        if (r != other.r) {
+            return r < other.r;
+        } else if (x != other.x) {
+            return x < other.x;
+        } else {
+            return y < other.y;
+        }
     }
 
-    int r;
-    float theta;
-    int theta_idx;
+    bool operator>(const circle& other) const {
+        if (r != other.r) {
+            return r > other.r;
+        } else if (x != other.x) {
+            return x > other.x;
+        } else {
+            return y > other.y;
+        }
+    }
+
+    int32_t x, y, r;
   };
 
   // File Output.
@@ -88,26 +96,22 @@ class Detector {
   uint64_t total_events;
   uint64_t total_msgs;
 
-  // DEPRECATED
-  static const int kHoughRadiusResolution = 640;
-  static const int kHoughAngularResolution = 21;
-  static const int kHoughMinAngle = -5;
-  static const int kHoughMaxAngle = 5;
+  // Precomputing the squared suppression radius.
+  int hough_nms_radius3_;
 
-  // Precomputing possible angles and their sin/cos values in order to vectorize
-  // the HT. Also precomputing the squared suppression radius.
-  Eigen::VectorXf thetas_;
-  Eigen::MatrixXf polar_param_mapping_;
-  int hough_nms_radius2_;
+  // Precomputing the square pixel deviations.
+  struct point {
+    point() : x(0), y(0) {}
+    point(int32_t _x, int32_t _y) : x(_x), y(_y) {}
+    int32_t x, y;
+  };
+  
+  std::vector<std::vector<point>> circle_xy;
 
   // Hough transform objects.
   typedef size_t HoughMatrix[
-        kHoughSpaceHeight][kHoughSpaceWidth][kHoughSpaceRadius];
-  typedef size_t (*HoughMatrixPtr)[kHoughSpaceWidth][kHoughSpaceRadius];
-  typedef size_t HoughImage[
-        kHoughSpaceHeight + 2 * kGradientNN][
-                kHoughSpaceWidth + 2 * kGradientNN];
-  typedef size_t (*HoughImagePtr)[kHoughSpaceWidth + 2 * kGradientNN];
+        kHoughSpaceRadius][kHoughSpaceHeight][kHoughSpaceWidth];
+  typedef size_t (*HoughMatrixPtr)[kHoughSpaceHeight][kHoughSpaceWidth];
 
   int camera_resolution_width_;
   int camera_resolution_height_;
@@ -135,42 +139,41 @@ class Detector {
 
   // Functions for Hough transform computation.
   void stepHoughTransform(
-      const std::vector<std::vector<size_t>>& points,
-      HoughMatrixPtr hough_space, std::vector<bool> *has_gradient,
-      std::vector<line> *last_maxima, bool initialized,
-      std::vector<std::vector<Detector::line>>* maxima_list,
+      const std::vector<point>& points,
+      HoughMatrixPtr hough_space, std::vector<circle> *last_maxima,
+      bool initialized, std::vector<std::vector<circle>>* maxima_list,
       std::vector<size_t>* maxima_change);
 
   void addMaximaInRadius(
-      int angle, int radius, const HoughMatrix& hough_space,
-      std::vector<Detector::line>* new_maxima,
+      int angle, int radius, const HoughMatrixPtr hough_space,
+      std::vector<circle>* new_maxima,
       std::vector<int>* new_maxima_value, bool skip_center = false);
   void applySuppressionRadius(
-      const std::vector<Detector::line>& candidate_maxima,
+      const std::vector<circle>& candidate_maxima,
       const std::vector<int>& candidate_maxima_values,
-      std::vector<Detector::line>* maxima);
+      std::vector<circle>* maxima);
   template <typename DerivedVec, typename DerivedMat>
   void initializeSinCosMap(
       Eigen::EigenBase<DerivedVec>& angles,
       Eigen::EigenBase<DerivedMat>& sin_cos_map, const int kMinAngle,
       const int kMaxAngle, const int kNumSteps);
-  bool isLocalMaxima(const Eigen::MatrixXi& hough_space, int i, int radius);
+  bool isLocalMaxima(HoughMatrixPtr hough_space, int32_t r, int32_t x, int32_t y);
   void newPoleDetection(double rho, double theta, double window_time, bool pol);
 
   void computeFullHoughSpace(
-      size_t index, HoughMatrix& hough_space, const Eigen::MatrixXi& radii);
+      size_t index, HoughMatrixPtr hough_space, const std::vector<point>& points);
 
   void computeFullNMS(
-      const HoughMatrix& hough_space, std::vector<Detector::line> *maxima);
+      const HoughMatrixPtr hough_space, std::vector<circle> *maxima);
   void iterativeNMS(
-      const Eigen::MatrixXf& points, HoughMatrix& hough_space, 
+      const Eigen::MatrixXf& points, HoughMatrixPtr hough_space, 
       const Eigen::MatrixXi& radii,
-      std::vector<std::vector<Detector::line>>* maxima_list,
+      std::vector<std::vector<circle>>* maxima_list,
       std::vector<size_t>* maxima_change);
 
   void eventPreProcessing(
       const dvs_msgs::EventArray::ConstPtr& orig_msg,
-      std::vector<std::vector<size_t>>* points, std::vector<double>* times);
+      std::vector<point>* points, std::vector<double>* times);
 
   // Initialisation functions.
   void computeUndistortionMapping();
@@ -179,21 +182,18 @@ class Detector {
   // Visualization functions.
   void drawPolarCorLine(
       cv::Mat& image_space, float rho, float  theta, cv::Scalar color) const;
-  void visualizeCurrentLineDetections(
-      const std::vector<std::vector<size_t>>& points,
-      const std::vector<std::vector<Detector::line>>& maxima_list,
+  void visualizeCurrentDetections(
+      const std::vector<point>& points,
+      const std::vector<std::vector<circle>>& maxima_list,
       const std::vector<size_t>& maxima_change) const;
 
   // For the very first message we need separate processing (e.g. a full HT).
   bool initialized;
-
   HoughMatrixPtr hough_space;
-  HoughImagePtr nn_lookup;
 
-  std::vector<Detector::line> last_maxima;
-  std::vector<std::vector<size_t>> last_points;
+  std::vector<circle> last_maxima;
+  std::vector<point> last_points;
   std::vector<double> last_times;
-  std::vector<bool> last_has_gradient;
 
   size_t num_messages;
   std::queue<size_t> (*filter_grid_)[kHoughSpaceWidth];

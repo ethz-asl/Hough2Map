@@ -13,7 +13,7 @@
     <param name="map_output" value="true"/>
     
     <param name="show_lines_in_video" value="true"/>
-    <param name="show_lines_every_nth" value="500"/>
+    <param name="show_lines_every_nth" value="50"/>
     <param name="hough_nms_radius" value="12"/>
     <param name="v" value="0"/>
   </node>
