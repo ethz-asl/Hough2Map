@@ -44,9 +44,9 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   CHECK(!FLAGS_rosbag_path.empty());
 
   // Debug printing
-  LOG(INFO) << "Resolution: | height: " << kHoughSpaceHeight
-      << " | width: " << kHoughSpaceWidth
-      << " | radius: " << kHoughSpaceRadius;
+  LOG(INFO) << "Resolution: | height: " << kHoughSpaceHeight - 2
+      << " | width: " << kHoughSpaceWidth - 2
+      << " | radius: " << kHoughSpaceRadius - 2;
   LOG(INFO) << "Min radius: " << kHoughMinRadius
       << " | max radius: " << kHoughMaxRadius;
 
@@ -94,13 +94,13 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   for (int32_t r = kHoughMinRadius; r <= kHoughMaxRadius; ++r) {
     int32_t x = r;
     int32_t y = 0;
-    const size_t r_index = r - kHoughMinRadius;
+    const size_t r_index = r - kHoughMinRadius + 1;
 
     while (true) {
-      circle_xy[r_index].emplace_back(x, y);
-      circle_xy[r_index].emplace_back(-x, y);
-      circle_xy[r_index].emplace_back(x, -y);
-      circle_xy[r_index].emplace_back(-x, -y);
+      circle_xy[r_index].emplace_back( x + 1,  y + 1);
+      circle_xy[r_index].emplace_back(-x + 1,  y + 1);
+      circle_xy[r_index].emplace_back( x + 1, -y + 1);
+      circle_xy[r_index].emplace_back(-x + 1, -y + 1);
 
       int32_t error1 = std::abs(x * x + (y + 1) * (y + 1) - r * r);
       int32_t error2 = std::abs((x - 1) * (x - 1) + y * y - r * r);
@@ -326,7 +326,7 @@ void Detector::stepHoughTransform(
   }
 
   // Perform computations iteratively for the rest of the events.
-  iterativeNMS(points, hough_space, radii, maxima_list, maxima_change);
+  iterativeNMS(points, hough_space, maxima_list, maxima_change);
 
   // Store last set of maxima to have a starting point for the next message.
   *last_maxima = maxima_list->back();
@@ -530,11 +530,11 @@ void Detector::visualizeCurrentDetections(
     }
 
     for (auto& maxima : maxima_list[maxima_index]) {
-      LOG(INFO) << " Maxima: " << maxima.r << " at "
-          << maxima.x << ", " << maxima.y;
+      LOG(INFO) << " Maxima: " << maxima.r - 1 + kHoughMinRadius << " at "
+          << maxima.x - 1 << ", " << maxima.y - 1;
       cv::circle(
-            vis_frame, cv::Point(maxima.x, maxima.y),
-            maxima.r + kHoughMinRadius, cv::Scalar(255, 0, 0));
+            vis_frame, cv::Point(maxima.x - 1, maxima.y - 1),
+            maxima.r - 1 + kHoughMinRadius, cv::Scalar(255, 0, 0));
     }
 
     cv::imshow("Detected circles", vis_frame);
@@ -545,8 +545,7 @@ void Detector::visualizeCurrentDetections(
 // Performing itterative Non-Maximum suppression on the current batch of
 // events based on a beginning Hough Space.
 void Detector::iterativeNMS(
-    const Eigen::MatrixXf& points, HoughMatrixPtr hough_space, 
-    const Eigen::MatrixXi& radii,
+    const std::vector<point>& points, HoughMatrixPtr hough_space, 
     std::vector<std::vector<circle>>* maxima_list,
     std::vector<size_t> *maxima_change) {
   CHECK_NOTNULL(maxima_list);
@@ -555,26 +554,34 @@ void Detector::iterativeNMS(
 
   std::vector<circle> new_maxima;
   std::vector<int> new_maxima_value;
-  const int num_events = points.cols();
 
-  for (int event = FLAGS_hough_window_size; event < num_events; event++) {
+  for (size_t event = FLAGS_hough_window_size; event < points.size(); event++) {
     // Take the maxima at the previous timestep.
-    /*std::vector<circle> &previous_maxima =
+    std::vector<circle> &previous_maxima =
         maxima_list->back();
 
     // Incrementing the accumulator cells for the current event.
-    for (int angle = 0; angle < kHoughAngularResolution; angle++) {
-      const int radius = radii(angle, event);
-      if (radius >= 0 && radius < kHoughRadiusResolution) {
-        hough_space(radius, angle)++;
+    for (size_t r = 1; r < kHoughSpaceRadius - 1; ++r) {
+      for (size_t j = 0; j < circle_xy[r].size(); ++j) {
+        const int32_t x = points[event].x + circle_xy[r][j].x;
+        const int32_t y = points[event].y + circle_xy[r][j].y;
+        if ((x >= 1) && (x < kHoughSpaceWidth - 1) && 
+            (y >= 1) && (y < kHoughSpaceHeight - 1)) {
+          ++hough_space[r][y][x];
+        }
       }
     }
 
     // Decrement the accumulator cells for the event to be removed.
-    for (int angle = 0; angle < kHoughAngularResolution; angle++) {
-      const int radius = radii(angle, event - FLAGS_hough_window_size);
-      if (radius >= 0 && radius < kHoughRadiusResolution) {
-        hough_space(radius, angle)--;
+    for (size_t r = 1; r < kHoughSpaceRadius - 1; ++r) {
+      for (size_t j = 0; j < circle_xy[r].size(); ++j) {
+        const size_t past_event = event - FLAGS_hough_window_size;
+        const int32_t x = points[past_event].x + circle_xy[r][j].x;
+        const int32_t y = points[past_event].y + circle_xy[r][j].y;
+        if ((x >= 1) && (x < kHoughSpaceWidth - 1) && 
+            (y >= 1) && (y < kHoughSpaceHeight - 1)) {
+          --hough_space[r][y][x];
+        }
       }
     }
 
@@ -591,79 +598,82 @@ void Detector::iterativeNMS(
     // PHASE 1 - Obtain candidates for global maxima
 
     // For points that got incremented.
-    for (int angle = 0; angle < kHoughAngularResolution; ++angle) {
-      const int radius = radii(angle, event);
-      if ((radius < 0) || (radius >= kHoughRadiusResolution)) {
-        continue;
-      }
+    for (size_t r = 1; r < kHoughSpaceRadius - 1; ++r) {
+      for (size_t j = 0; j < circle_xy[r].size(); ++j) {
+        const int32_t x = points[event].x + circle_xy[r][j].x;
+        const int32_t y = points[event].y + circle_xy[r][j].y;
+        if ((x <= 0) || (x >= kHoughSpaceWidth - 1) ||
+            (y <= 0) || (y >= kHoughSpaceHeight - 1)) {
+          continue;
+        }
 
-      // If any of the surrounding ones are equal the center
-      // for sure it is not a local maximum.
-      bool skip_center = false;
+        // If any of the surrounding ones are equal the center
+        // for sure it is not a local maximum.
+        bool skip_center = false;
 
-      // Iterate over neighbourhood to check if we might have
-      // supressed a surrounding maximum by growing.
-      const int m_l = std::max(angle - 1, 0);
-      const int m_r = std::min(angle + 1, kHoughAngularResolution - 1);
-      const int n_l = std::max(radius - 1, 0);
-      const int n_r = std::min(radius + 1, kHoughRadiusResolution - 1);
-      for (int m = m_l; m <= m_r; ++m) {
-        for (int n = n_l; n <= n_r; ++n) {
-          // The center is a separate case.
-          if ((m == angle) && (n == radius)) {
-            continue;
-          }
+        // Iterate over neighbourhood to check if we might have
+        // supressed a surrounding maximum by growing.
+        for (int32_t m = r - 1; m <= r + 1; ++m) {
+          for (int32_t n = y - 1; n <= y + 1; ++n) {
+            for (int32_t p = x - 1; p <= x + 1; ++p) {
+              // The center is a separate case.
+              if ((m == r) && (n == y) && (p == x)) {
+                continue;
+              }
 
-          // Compare point to its neighbors.
-          if (hough_space(radius, angle) == hough_space(n, m)) {
-            skip_center = true;
-            // Compare to all known maxima from the previous timestep.
-            for (size_t i = 0; i < previous_maxima.size(); ++i) {
-              if ((n == previous_maxima[i].r) &&
-                  (m == previous_maxima[i].theta_idx)) {
-                // We need to discard an old maximum.
-                changed = true;
-                discard[i] = true;
+              // Compare point to its neighbors.
+              if (hough_space[r][y][x] == hough_space[m][n][p]) {
+                skip_center = true;
+                // Compare to all known maxima from the previous timestep.
+                for (size_t i = 0; i < previous_maxima.size(); ++i) {
+                  if ((m == previous_maxima[i].r) &&
+                      (n == previous_maxima[i].y) &&
+                      (p == previous_maxima[i].x)) {
+                    // We need to discard an old maximum.
+                    changed = true;
+                    discard[i] = true;
 
-                // And add a new one.
-                addMaximaInRadius(
-                    m, n, hough_space, &new_maxima, &new_maxima_value);
-                break;
+                    // And add a new one.
+                    addMaximaInRadius(
+                        m, n, p, hough_space, &new_maxima, &new_maxima_value);
+                    break;
+                  }
+                }
               }
             }
           }
         }
-      }
 
-      // The center and a neighbour have the same value so
-      // no point in checking if it is a local maximum.
-      if (skip_center) {
-        continue;
-      }
-
-      // This is the case for the center point. First checking if it's currently
-      // a maximum.
-      if ((hough_space(radius, angle) > FLAGS_hough_threshold) &&
-          isLocalMaxima(hough_space, angle, radius)) {
-        bool add_maximum = true;
-        // Check if it was a maximum previously.
-        for (const auto& maximum : previous_maxima) {
-          if ((radius == maximum.r) && (angle == maximum.theta_idx)) {
-            add_maximum = false;
-            break;
-          }
+        // The center and a neighbour have the same value so
+        // no point in checking if it is a local maximum.
+        if (skip_center) {
+          continue;
         }
 
-        // If required, add it to the list.
-        if (add_maximum) {
-          new_maxima.emplace_back(radius, thetas_(angle), angle);
-          new_maxima_value.emplace_back(hough_space(radius, angle));
+        // This is the case for the center point. First checking if it's currently
+        // a maximum.
+        if ((hough_space[r][y][x] > FLAGS_hough_threshold) &&
+            isLocalMaxima(hough_space, r, y, x)) {
+          bool add_maximum = true;
+          // Check if it was a maximum previously.
+          for (const auto& maximum : previous_maxima) {
+            if ((r == maximum.r) && (y == maximum.y) && (x == maximum.x)) {
+              add_maximum = false;
+              break;
+            }
+          }
+
+          // If required, add it to the list.
+          if (add_maximum) {
+            new_maxima.emplace_back(x, y, r);
+            new_maxima_value.emplace_back(hough_space[r][y][x]);
+          }
         }
       }
     }
 
     // For accumulator cells that got decremented.
-    for (int angle = 0; angle < kHoughAngularResolution; ++angle) {
+    /*for (int angle = 0; angle < kHoughAngularResolution; ++angle) {
       const int radius = radii(angle, event - FLAGS_hough_window_size);
       if ((radius < 0) || (radius >= kHoughRadiusResolution)) {
         continue;
@@ -716,9 +726,9 @@ void Detector::iterativeNMS(
           }
         }
       }
-    }
+    }*/
 
-    if (new_maxima.empty()) {
+    /*if (new_maxima.empty()) {
       // If no discards then nothing changed and we can skip this entirely.
       if (changed) {
         // No new maxima in the temporary storage, so we only get rid of the
@@ -852,11 +862,11 @@ void Detector::computeFullNMS(
   std::vector<int> candidate_maxima_value;
 
   // Checking every positions and radius hypothesis.
-  for (int32_t r = 0; r < kHoughSpaceRadius; ++r) {
-    for (int32_t y = 0; y < kHoughSpaceHeight; ++y) {
-      for (int32_t x = 0; x < kHoughSpaceWidth; ++x) {
+  for (int32_t r = 1; r < kHoughSpaceRadius - 1; ++r) {
+    for (int32_t y = 1; y < kHoughSpaceHeight - 1; ++y) {
+      for (int32_t x = 1; x < kHoughSpaceWidth - 1; ++x) {
         if (hough_space[r][y][x] > FLAGS_hough_threshold) {
-          if (isLocalMaxima(hough_space, r, x, y)) {
+          if (isLocalMaxima(hough_space, r, y, x)) {
             // Add as a possible maximum to the list.
             candidate_maxima.emplace_back(x, y, r);
             candidate_maxima_value.emplace_back(hough_space[r][y][x]);
@@ -880,12 +890,12 @@ void Detector::computeFullHoughSpace(
   // Looping over all events that have an influence on the current total
   // Hough space (i.e. fall in the detection window).
   for (size_t i = index - FLAGS_hough_window_size + 1; i <= index; ++i) {
-    for (size_t r = 0; r < kHoughSpaceRadius; ++r) {
+    for (size_t r = 1; r < kHoughSpaceRadius - 1; ++r) {
       for (size_t j = 0; j < circle_xy[r].size(); ++j) {
         const int32_t x = points[i].x + circle_xy[r][j].x;
         const int32_t y = points[i].y + circle_xy[r][j].y;
-        if (x >= 0 && x < kHoughSpaceWidth && 
-            y >= 0 && y < kHoughSpaceHeight) {
+        if ((x >= 1) && (x < kHoughSpaceWidth - 1) && 
+            (y >= 1) && (y < kHoughSpaceHeight - 1)) {
           ++hough_space[r][y][x];
         }
       }
@@ -947,27 +957,33 @@ void Detector::eventPreProcessing(
 }
 
 void Detector::addMaximaInRadius(
-    int angle, int radius, HoughMatrixPtr hough_space,
-    std::vector<hough2map::Detector::circle>* new_maxima,
-    std::vector<int>* new_maxima_value, bool skip_center) {
-  /*int m_l = std::max(angle - FLAGS_hough_nms_radius, 0);
-  int m_r = std::min(angle + FLAGS_hough_nms_radius + 1, kHoughAngularResolution);
-  int n_l = std::max(radius - FLAGS_hough_nms_radius, 0);
-  int n_r = std::min(radius + FLAGS_hough_nms_radius + 1, kHoughRadiusResolution);
+    int32_t r, int32_t y, int32_t x, HoughMatrixPtr hough_space,
+    std::vector<circle>* new_maxima, std::vector<int>* new_maxima_value,
+    bool skip_center) {
+  int32_t m_l = std::max(r - FLAGS_hough_nms_radius, 1);
+  int32_t m_r = std::min(r + FLAGS_hough_nms_radius + 1, kHoughSpaceRadius - 1);
 
-  for (int m = m_l; m < m_r; m++) {
-    for (int n = n_l; n < n_r; n++) {
-      if (skip_center && (n == radius) && (m == angle)) {
-        continue;
-      }
+  int32_t n_l = std::max(y - FLAGS_hough_nms_radius, 1);
+  int32_t n_r = std::min(y + FLAGS_hough_nms_radius + 1, kHoughSpaceHeight - 1);
 
-      if ((hough_space(n, m) > FLAGS_hough_threshold) &&
-          isLocalMaxima(hough_space, m, n)) {
-        new_maxima->emplace_back(n, thetas_(m), m);
-        new_maxima_value->emplace_back(hough_space(n, m));
+  int32_t p_l = std::max(x - FLAGS_hough_nms_radius, 1);
+  int32_t p_r = std::min(x + FLAGS_hough_nms_radius + 1, kHoughSpaceWidth - 1);
+
+  for (int32_t m = m_l; m <= m_r; ++m) {
+    for (int32_t n = n_l; n <= n_r; ++n) {
+      for (int32_t p = p_l; p <= p_r; ++p) {
+        if (skip_center && (m == r) && (n == y) && (p == x)) {
+          continue;
+        }
+
+        if ((hough_space[m][n][p] > FLAGS_hough_threshold) &&
+            isLocalMaxima(hough_space, m, n, p)) {
+          new_maxima->emplace_back(p, n, m);
+          new_maxima_value->emplace_back(hough_space[m][n][p]);
+        }
       }
     }
-  }*/
+  }
 }
 
 void Detector::applySuppressionRadius(
@@ -1009,8 +1025,8 @@ void Detector::applySuppressionRadius(
       // the current maximum is kept and added to the output buffer.
       int distance =
           (maximum.r - candidate_maximum.r) * (maximum.r - candidate_maximum.r) +
-          (maximum.x - candidate_maximum.x) * (maximum.x - candidate_maximum.x) +
-          (maximum.y - candidate_maximum.y) * (maximum.y - candidate_maximum.y);
+          (maximum.y - candidate_maximum.y) * (maximum.y - candidate_maximum.y) +
+          (maximum.x - candidate_maximum.x) * (maximum.x - candidate_maximum.x);
 
         if (distance < hough_nms_radius3_) {
           add_maximum = false;
@@ -1027,26 +1043,14 @@ void Detector::applySuppressionRadius(
 
 // Check if the center value is a maxima.
 bool Detector::isLocalMaxima(
-    HoughMatrixPtr hough_space, int32_t r, int32_t x, int32_t y) {
-  // Define the 8-connected neighborhood.
-  const int32_t r_l = std::max(r - 1, 0);
-  const int32_t r_r = std::min(
-        r + 1, static_cast<int32_t>(kHoughSpaceRadius) - 1);
- 
-  const int32_t x_l = std::max(x - 1, 0);
-  const int32_t x_r = std::min(
-        x + 1, static_cast<int32_t>(kHoughSpaceWidth) - 1);
- 
-  const int32_t y_l = std::max(y - 1, 0);
-  const int32_t y_r = std::min(
-        y + 1, static_cast<int32_t>(kHoughSpaceHeight) - 1);
-
-  // Loop over all neighborhood points
-  for (int32_t i = r_l; i <= r_r; ++i) {
-    for (int32_t j = y_l; j <= y_r; ++j) {
-      for (int32_t k = x_l; k <= x_r; ++k) {
-        if ((i != r) || (j != y) || (k != x)) {
-          if (hough_space[i][j][k] >= hough_space[r][y][x]) {
+    HoughMatrixPtr hough_space, int32_t r, int32_t y, int32_t x) {
+  // Loop over the 8-connected neighborhood.
+  LOG(INFO) << r << " " << y << " " << x;
+  for (int32_t m = r - 1; m <= r + 1; ++m) {
+    for (int32_t n = y - 1; n <= y + 1; ++n) {
+      for (int32_t p = x - 1; p <= x + 1; ++p) {
+        if ((m != r) || (n != y) || (p != x)) {
+          if (hough_space[m][n][p] >= hough_space[r][y][x]) {
             return false;
           }
         }

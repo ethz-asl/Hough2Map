@@ -26,12 +26,13 @@
 #include <vector>
 
 // General Parameters
-constexpr size_t kHoughSpaceHeight = 480;
-constexpr size_t kHoughSpaceWidth = 640;
+constexpr int32_t kHoughSpaceHeight = 480 + 2;
+constexpr int32_t kHoughSpaceWidth = 640 + 2;
 
-constexpr size_t kHoughMinRadius = 8;
-constexpr size_t kHoughMaxRadius = 32;
-constexpr size_t kHoughSpaceRadius = kHoughMaxRadius - kHoughMinRadius + 1;
+constexpr int32_t kHoughMinRadius = 8;
+constexpr int32_t kHoughMaxRadius = 32;
+constexpr int32_t kHoughSpaceRadius = 
+        (kHoughMaxRadius - kHoughMinRadius + 1) + 2;
 
 constexpr size_t kMaxTimeToLive = 100;
 constexpr size_t kMaxEventRate = 10 * kMaxTimeToLive;
@@ -145,7 +146,7 @@ class Detector {
       std::vector<size_t>* maxima_change);
 
   void addMaximaInRadius(
-      int angle, int radius, const HoughMatrixPtr hough_space,
+      int32_t r, int32_t y, int32_t x, HoughMatrixPtr hough_space,
       std::vector<circle>* new_maxima,
       std::vector<int>* new_maxima_value, bool skip_center = false);
   void applySuppressionRadius(
@@ -166,8 +167,7 @@ class Detector {
   void computeFullNMS(
       const HoughMatrixPtr hough_space, std::vector<circle> *maxima);
   void iterativeNMS(
-      const Eigen::MatrixXf& points, HoughMatrixPtr hough_space, 
-      const Eigen::MatrixXi& radii,
+      const std::vector<point>& points, HoughMatrixPtr hough_space, 
       std::vector<std::vector<circle>>* maxima_list,
       std::vector<size_t>* maxima_change);
 
