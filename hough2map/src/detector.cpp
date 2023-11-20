@@ -573,9 +573,9 @@ void Detector::iterativeNMS(
     }
 
     // Decrement the accumulator cells for the event to be removed.
+    const size_t past_event = event - FLAGS_hough_window_size;
     for (size_t r = 1; r < kHoughSpaceRadius - 1; ++r) {
       for (size_t j = 0; j < circle_xy[r].size(); ++j) {
-        const size_t past_event = event - FLAGS_hough_window_size;
         const int32_t x = points[past_event].x + circle_xy[r][j].x;
         const int32_t y = points[past_event].y + circle_xy[r][j].y;
         if ((x >= 1) && (x < kHoughSpaceWidth - 1) && 
@@ -673,62 +673,65 @@ void Detector::iterativeNMS(
     }
 
     // For accumulator cells that got decremented.
-    /*for (int angle = 0; angle < kHoughAngularResolution; ++angle) {
-      const int radius = radii(angle, event - FLAGS_hough_window_size);
-      if ((radius < 0) || (radius >= kHoughRadiusResolution)) {
-        continue;
-      }
-
-      // If decremented accumulator cell was previously a maximum, remove it.
-      // If it's still a maximum, we will deal with it later.
-      bool skip_neighborhood = false;
-      for (size_t k = 0; k < previous_maxima.size(); ++k) {
-        if ((radius == previous_maxima[k].r) &&
-            (angle == previous_maxima[k].theta_idx)) {
-          // Mark as discarded since we will already have added it
-          // in the next step if it still is above the threshold.
-          changed = true;
-          discard[k] = true;
-
-          // Re-add to list of possible maxima for later pruning.
-          addMaximaInRadius(
-              angle, radius, hough_space, &new_maxima, &new_maxima_value);
-
-          // The neighborhood of this accumulator cell has been checked as part of
-          // addMaximaInRadius, so no need to do it again.
-          skip_neighborhood = true;
-          break;
+    for (size_t r = 1; r < kHoughSpaceRadius - 1; ++r) {
+      for (size_t j = 0; j < circle_xy[r].size(); ++j) {
+        const int32_t x = points[past_event].x + circle_xy[r][j].x;
+        const int32_t y = points[past_event].y + circle_xy[r][j].y;
+        if ((x <= 0) || (x >= kHoughSpaceWidth - 1) ||
+            (y <= 0) || (y >= kHoughSpaceHeight - 1)) {
+          continue;
         }
-      }
 
-      if (!skip_neighborhood) {
-        // Iterate over neighbourhood to check if we might have
-        // created a new local maxima by decreasing.
-        const int m_l = std::max(angle - 1, 0);
-        const int m_r = std::min(angle + 1, kHoughAngularResolution - 1);
-        const int n_l = std::max(radius - 1, 0);
-        const int n_r = std::min(radius + 1, kHoughRadiusResolution - 1);
-        for (int m = m_l; m <= m_r; m++) {
-          for (int n = n_l; n <= n_r; n++) {
-            // The center is a separate case.
-            if ((m == angle) && (n == radius)) {
-              continue;
-            }
+        // If decremented accumulator cell was previously a maximum, remove it.
+        // If it's still a maximum, we will deal with it later.
+        bool skip_neighborhood = false;
+        for (size_t k = 0; k < previous_maxima.size(); ++k) {
+          if ((r == previous_maxima[k].r) &&
+              (y == previous_maxima[k].y) &&
+              (x == previous_maxima[k].x)) {
+            // Mark as discarded since we will already have added it
+            // in the next step if it still is above the threshold.
+            changed = true;
+            discard[k] = true;
 
-            // Any neighbor points now larger and a maximum?
-            if ((hough_space(radius, angle) + 1 == hough_space(n, m)) &&
-                (hough_space(n, m) > FLAGS_hough_threshold) &&
-                isLocalMaxima(hough_space, m, n)) {
-              // Add to temporary storage.
-              new_maxima.emplace_back(n, thetas_(m), m);
-              new_maxima_value.emplace_back(hough_space(n, m));
+            // Re-add to list of possible maxima for later pruning.
+            addMaximaInRadius(
+                r, y, x, hough_space, &new_maxima, &new_maxima_value);
+
+            // The neighborhood of this accumulator cell has been checked as part of
+            // addMaximaInRadius, so no need to do it again.
+            skip_neighborhood = true;
+            break;
+          }
+        }
+
+        if (!skip_neighborhood) {
+          // Iterate over neighbourhood to check if we might have
+          // created a new local maxima by decreasing.
+          for (int32_t m = r - 1; m <= r + 1; ++m) {
+            for (int32_t n = y - 1; n <= y + 1; ++n) {
+              for (int32_t p = x - 1; p <= x + 1; ++p) {
+                // The center is a separate case.
+                if ((m == r) && (n == y) && (p == x)) {
+                  continue;
+                }
+
+                // Any neighbor points now larger and a maximum?
+                if ((hough_space[r][y][x] + 1 == hough_space[m][n][p]) &&
+                    (hough_space[m][n][p] > FLAGS_hough_threshold) &&
+                    isLocalMaxima(hough_space, m, n, p)) {
+                  // Add to temporary storage.
+                  new_maxima.emplace_back(p, n, m);
+                  new_maxima_value.emplace_back(hough_space[m][n][p]);
+                }
+              }
             }
           }
         }
       }
-    }*/
+    }
 
-    /*if (new_maxima.empty()) {
+    if (new_maxima.empty()) {
       // If no discards then nothing changed and we can skip this entirely.
       if (changed) {
         // No new maxima in the temporary storage, so we only get rid of the
@@ -749,8 +752,8 @@ void Detector::iterativeNMS(
       for (int i = 0; i < previous_maxima.size(); i++) {
         if (!discard[i]) {
           new_maxima.emplace_back(previous_maxima[i]);
-          new_maxima_value.emplace_back(hough_space(
-              previous_maxima[i].r, previous_maxima[i].theta_idx));
+          new_maxima_value.emplace_back(hough_space[
+            previous_maxima[i].r][previous_maxima[i].y][previous_maxima[i].x]);
         }
       }
 
@@ -769,8 +772,7 @@ void Detector::iterativeNMS(
           if (!discard[i]) {
             bool found = false;
             for (const circle& current_maximum : current_maxima) {
-              if ((current_maximum.r == previous_maxima[i].r) &&
-                  (current_maximum.theta_idx == previous_maxima[i].theta_idx)) {
+              if (current_maximum == previous_maxima[i]) {
                 found = true;
                 break;
               }
@@ -779,7 +781,7 @@ void Detector::iterativeNMS(
             if (!found) {
               discard[i] = true;
               addMaximaInRadius(
-                  previous_maxima[i].theta_idx, previous_maxima[i].r,
+                  previous_maxima[i].r, previous_maxima[i].y, previous_maxima[i].x,
                   hough_space, &new_maxima, &new_maxima_value, true);
             }
           }
@@ -798,7 +800,7 @@ void Detector::iterativeNMS(
         maxima_list->emplace_back(current_maxima);
         maxima_change->emplace_back(event);
       }
-    }*/
+    }
 
     // DEBUG
     /*{
@@ -1045,7 +1047,6 @@ void Detector::applySuppressionRadius(
 bool Detector::isLocalMaxima(
     HoughMatrixPtr hough_space, int32_t r, int32_t y, int32_t x) {
   // Loop over the 8-connected neighborhood.
-  LOG(INFO) << r << " " << y << " " << x;
   for (int32_t m = r - 1; m <= r + 1; ++m) {
     for (int32_t n = y - 1; n <= y + 1; ++n) {
       for (int32_t p = x - 1; p <= x + 1; ++p) {

@@ -30,7 +30,7 @@ constexpr int32_t kHoughSpaceHeight = 480 + 2;
 constexpr int32_t kHoughSpaceWidth = 640 + 2;
 
 constexpr int32_t kHoughMinRadius = 8;
-constexpr int32_t kHoughMaxRadius = 32;
+constexpr int32_t kHoughMaxRadius = 14;
 constexpr int32_t kHoughSpaceRadius = 
         (kHoughMaxRadius - kHoughMinRadius + 1) + 2;
 
@@ -48,6 +48,13 @@ class Detector {
   std::string detector_name_ = "Hough";
 
  private:
+  // Struct for a 2D point
+  struct point {
+    point() : x(0), y(0) {}
+    point(int32_t _x, int32_t _y) : x(_x), y(_y) {}
+    int32_t x, y;
+  };
+
   // Struct for describing a detected circle.
   struct circle {
     circle(int32_t _x, int32_t _y, int32_t _r) :
@@ -100,13 +107,7 @@ class Detector {
   // Precomputing the squared suppression radius.
   int hough_nms_radius3_;
 
-  // Precomputing the square pixel deviations.
-  struct point {
-    point() : x(0), y(0) {}
-    point(int32_t _x, int32_t _y) : x(_x), y(_y) {}
-    int32_t x, y;
-  };
-  
+  // Precomputing the square pixel deviations.  
   std::vector<std::vector<point>> circle_xy;
 
   // Hough transform objects.
@@ -147,8 +148,8 @@ class Detector {
 
   void addMaximaInRadius(
       int32_t r, int32_t y, int32_t x, HoughMatrixPtr hough_space,
-      std::vector<circle>* new_maxima,
-      std::vector<int>* new_maxima_value, bool skip_center = false);
+      std::vector<circle>* new_maxima, std::vector<int>* new_maxima_value,
+      bool skip_center = false);
   void applySuppressionRadius(
       const std::vector<circle>& candidate_maxima,
       const std::vector<int>& candidate_maxima_values,
