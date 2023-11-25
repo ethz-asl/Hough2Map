@@ -538,7 +538,7 @@ void Detector::visualizeCurrentDetections(
     }
 
     for (auto& maxima : maxima_list[maxima_index]) {
-      LOG(INFO) << " Maxima: " << maxima.r - 1 + kHoughMinRadius << " at "
+      VLOG(10) << " Maxima: " << maxima.r - 1 + kHoughMinRadius << " at "
           << maxima.x - 1 << ", " << maxima.y - 1;
       cv::circle(
             vis_frame, cv::Point(maxima.x - 1, maxima.y - 1),
@@ -812,11 +812,12 @@ void Detector::iterativeNMS(
 
     // DEBUG
     /*{
-      HoughMatrix hough_space_debug;
+      HoughMatrixPtr hough_space_debug;
+      hough_space_debug = new HoughMatrix;
       std::vector<circle> maxima_debug;
 
-      hough_space_debug.setZero();
-      computeFullHoughSpace(event, hough_space_debug, radii);
+      std::memset(hough_space_debug, 0, sizeof(HoughMatrix));
+      computeFullHoughSpace(event, hough_space_debug, points);
       computeFullNMS(hough_space_debug, &maxima_debug);
 
       std::stable_sort(maxima_debug.begin(), maxima_debug.end());
@@ -835,29 +836,75 @@ void Detector::iterativeNMS(
       } else {
         different = true;
       }
+      
+      LOG(INFO) << "==================== "
+          << event << " / " << points.size();
+      for (size_t j = 0; j < maxima_debug.size(); ++j) {
+        LOG(INFO) << "d: " << maxima_debug[j].r << " "
+            << maxima_debug[j].x << " " << maxima_debug[j].y;
+      }
+      for (size_t j = 0; j < current_maxima.size(); ++j) {
+        LOG(INFO) << "i: " << current_maxima[j].r << " "
+            << current_maxima[j].x << " " << current_maxima[j].y;
+      }
 
       if (different) {
-        LOG(INFO) << "==================== " << event;
-        for (size_t j = 0; j < maxima_debug.size(); ++j) {
-          LOG(INFO) << "d: " << maxima_debug[j].r << " "
-              << maxima_debug[j].theta_idx;
-        }
-        for (size_t j = 0; j < current_maxima.size(); ++j) {
-          LOG(INFO) << "i: " << current_maxima[j].r << " "
-              << current_maxima[j].theta_idx;
+        // Incrementing the accumulator cells for the current event.
+        for (size_t r = 1; r < kHoughSpaceRadius - 1; ++r) {
+          for (size_t j = 0; j < circle_xy[r].size(); ++j) {
+            const int32_t x = points[event].x + circle_xy[r][j].x;
+            const int32_t y = points[event].y + circle_xy[r][j].y;
+            if ((x >= 1) && (x < kHoughSpaceWidth - 1) && 
+                (y >= 1) && (y < kHoughSpaceHeight - 1)) {
+              LOG(INFO) << " inc: " << r << " " << x << " " << y;
+            }
+          }
         }
 
-        for (int i = 0; i < hough_space.rows(); ++i) {
-          std::stringstream row;
-          row << std::setw(3) << i << ": ";
-          for (int j = 0; j < hough_space.cols(); ++j) {
-            row << std::setw(2) << hough_space(i, j) << ", ";
+        // Decrement the accumulator cells for the event to be removed.
+        const size_t past_event = event - FLAGS_hough_window_size;
+        for (size_t r = 1; r < kHoughSpaceRadius - 1; ++r) {
+          for (size_t j = 0; j < circle_xy[r].size(); ++j) {
+            const int32_t x = points[past_event].x + circle_xy[r][j].x;
+            const int32_t y = points[past_event].y + circle_xy[r][j].y;
+            if ((x >= 1) && (x < kHoughSpaceWidth - 1) && 
+                (y >= 1) && (y < kHoughSpaceHeight - 1)) {
+              LOG(INFO) << " dec: " << r << " " << x << " " << y;
+            }
           }
-          LOG(INFO) << row.str();
+        }
+
+        for (size_t j = 0; j < maxima_debug.size(); ++j) {
+          LOG(INFO) << "houghspace: " << maxima_debug[j].r << " "
+              << maxima_debug[j].x << " " << maxima_debug[j].y;
+          for (size_t m = maxima_debug[j].r - 1; m <= maxima_debug[j].r + 1; ++m) {
+            for (size_t n = maxima_debug[j].y - 1; n <= maxima_debug[j].y + 1; ++n) {
+              std::string line = "";
+              for (size_t p = maxima_debug[j].x - 1; p <= maxima_debug[j].x + 1; ++p) {
+                line += std::to_string(hough_space[m][n][p]) + " "; 
+              }
+              LOG(INFO) << line;
+            }
+            LOG(INFO) << "-----------------";
+          }
+        }
+
+        for (size_t j = 0; j < kHoughSpaceRadius; ++j) {
+          for (size_t m = 0; m < kHoughSpaceHeight; ++m) {
+            for (size_t n = 0; n < kHoughSpaceWidth; ++n) {
+              if (hough_space_debug[j][m][n] != hough_space[j][m][n]) {
+                LOG(INFO) << j << " " << m << " " << n << " "
+                  << "dH: " << hough_space_debug[j][m][n]
+                  << " iH " << hough_space[j][m][n];
+              }
+            }
+          }
         }
 
         exit(0);
       }
+
+      delete hough_space_debug;
     }*/
   }
 }
