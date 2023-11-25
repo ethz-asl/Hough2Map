@@ -97,10 +97,18 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
     const size_t r_index = r - kHoughMinRadius + 1;
 
     while (true) {
-      circle_xy[r_index].emplace_back( x + 1,  y + 1);
-      circle_xy[r_index].emplace_back(-x + 1,  y + 1);
-      circle_xy[r_index].emplace_back( x + 1, -y + 1);
-      circle_xy[r_index].emplace_back(-x + 1, -y + 1);
+      if (x == 0) {
+        circle_xy[r_index].emplace_back( x + 1, -y + 1);
+        circle_xy[r_index].emplace_back( x + 1,  y + 1);
+      } else if (y == 0) {
+        circle_xy[r_index].emplace_back( x + 1,  y + 1);
+        circle_xy[r_index].emplace_back(-x + 1,  y + 1);
+      } else {
+        circle_xy[r_index].emplace_back( x + 1,  y + 1);
+        circle_xy[r_index].emplace_back(-x + 1,  y + 1);
+        circle_xy[r_index].emplace_back( x + 1, -y + 1);
+        circle_xy[r_index].emplace_back(-x + 1, -y + 1);
+      }
 
       int32_t error1 = std::abs(x * x + (y + 1) * (y + 1) - r * r);
       int32_t error2 = std::abs((x - 1) * (x - 1) + y * y - r * r);
