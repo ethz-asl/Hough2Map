@@ -35,7 +35,9 @@ constexpr int32_t kHoughSpaceRadius =
         (kHoughMaxRadius - kHoughMinRadius + 1) + 2;
 
 constexpr size_t kMaxTimeToLive = 100;
-constexpr size_t kMaxEventRate = 10 * kMaxTimeToLive;
+constexpr size_t kMaxEventRate = kMaxTimeToLive;
+
+constexpr size_t kNumThreads = 4;
 
 namespace hough2map {
 class Detector {
@@ -109,11 +111,14 @@ class Detector {
 
   // Precomputing the square pixel deviations.  
   std::vector<std::vector<point>> circle_xy;
+  std::vector<std::vector<point>> lines_xy;
 
   // Hough transform objects.
   typedef size_t HoughMatrix[
         kHoughSpaceRadius][kHoughSpaceHeight][kHoughSpaceWidth];
   typedef size_t (*HoughMatrixPtr)[kHoughSpaceHeight][kHoughSpaceWidth];
+  typedef int32_t HoughImage[kHoughSpaceHeight][kHoughSpaceWidth];
+  typedef int32_t (*HoughImagePtr)[kHoughSpaceWidth];
 
   int camera_resolution_width_;
   int camera_resolution_height_;
@@ -142,6 +147,8 @@ class Detector {
   // Functions for Hough transform computation.
   void stepHoughTransform(
       const std::vector<point>& points,
+      std::vector<int32_t>* gradient_magnitudes,
+      std::vector<int32_t>* gradient_directions,
       HoughMatrixPtr hough_space, std::vector<circle> *last_maxima,
       bool initialized, std::vector<std::vector<circle>>* maxima_list,
       std::vector<size_t>* maxima_change);
@@ -154,21 +161,23 @@ class Detector {
       const std::vector<circle>& candidate_maxima,
       const std::vector<int>& candidate_maxima_values,
       std::vector<circle>* maxima);
-  template <typename DerivedVec, typename DerivedMat>
-  void initializeSinCosMap(
-      Eigen::EigenBase<DerivedVec>& angles,
-      Eigen::EigenBase<DerivedMat>& sin_cos_map, const int kMinAngle,
-      const int kMaxAngle, const int kNumSteps);
-  bool isLocalMaxima(HoughMatrixPtr hough_space, int32_t r, int32_t x, int32_t y);
-  void newPoleDetection(double rho, double theta, double window_time, bool pol);
+  inline bool isLocalMaxima(
+        HoughMatrixPtr hough_space, int32_t r, int32_t x, int32_t y);
+  inline void calculateSobel(
+        int32_t x, int32_t y, int32_t* magnitude, int32_t* direction);
 
   void computeFullHoughSpace(
-      size_t index, HoughMatrixPtr hough_space, const std::vector<point>& points);
-
+      size_t index, HoughMatrixPtr hough_space,
+      const std::vector<point>& points,
+      const std::vector<int32_t>& gradient_magnitudes,
+      const std::vector<int32_t>& gradient_directions);
   void computeFullNMS(
       const HoughMatrixPtr hough_space, std::vector<circle> *maxima);
   void iterativeNMS(
-      const std::vector<point>& points, HoughMatrixPtr hough_space, 
+      const std::vector<point>& points,
+      const std::vector<int32_t>& gradient_magnitudes,
+      const std::vector<int32_t>& gradient_directions,
+      HoughMatrixPtr hough_space,
       std::vector<std::vector<circle>>* maxima_list,
       std::vector<size_t>* maxima_change);
 
@@ -181,8 +190,6 @@ class Detector {
   void loadCalibration();
 
   // Visualization functions.
-  void drawPolarCorLine(
-      cv::Mat& image_space, float rho, float  theta, cv::Scalar color) const;
   void visualizeCurrentDetections(
       const std::vector<point>& points,
       const std::vector<std::vector<circle>>& maxima_list,
@@ -191,10 +198,13 @@ class Detector {
   // For the very first message we need separate processing (e.g. a full HT).
   bool initialized;
   HoughMatrixPtr hough_space;
+  HoughImagePtr gradient_window;
 
   std::vector<circle> last_maxima;
   std::vector<point> last_points;
   std::vector<double> last_times;
+  std::vector<int32_t> last_magnitudes;
+  std::vector<int32_t> last_directions;
 
   size_t num_messages;
   std::queue<size_t> (*filter_grid_)[kHoughSpaceWidth];

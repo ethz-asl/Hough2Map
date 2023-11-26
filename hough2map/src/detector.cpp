@@ -1,9 +1,11 @@
 #include "hough2map/detector.h"
 
 #include <chrono>
+//#include <omp.h>
 #include <ros/package.h>
 #include <rosbag/bag.h>
 #include <rosbag/view.h>
+//#include <thread>
 
 DEFINE_string(rosbag_path, "", "Rosbag to process.");
 DEFINE_string(event_topic, "/dvs/events", "Topic for event messages.");
@@ -50,8 +52,12 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   LOG(INFO) << "Min radius: " << kHoughMinRadius
       << " | max radius: " << kHoughMaxRadius;
 
+  // Initialize multi-threading
+  //omp_set_num_threads(kNumThreads);
+
   // Allocate memory for the hough space
   hough_space = new HoughMatrix;
+  gradient_window = new HoughImage;
   filter_grid_ = new std::queue<size_t>[kHoughSpaceHeight][kHoughSpaceWidth];
 
   // Keep track of number of dvs messages received for filtering
@@ -89,47 +95,31 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
   // Compute undistortion for given camera parameters.
   computeUndistortionMapping();
 
-  // Precompute circles for easier runtime performance
-  circle_xy.resize(kHoughSpaceRadius);
-  for (int32_t r = kHoughMinRadius; r <= kHoughMaxRadius; ++r) {
-    int32_t x = r;
-    int32_t y = 0;
-    const size_t r_index = r - kHoughMinRadius + 1;
-
-    while (true) {
-      if (x == 0) {
-        circle_xy[r_index].emplace_back( x + 1, -y + 1);
-        circle_xy[r_index].emplace_back( x + 1,  y + 1);
-      } else if (y == 0) {
-        circle_xy[r_index].emplace_back( x + 1,  y + 1);
-        circle_xy[r_index].emplace_back(-x + 1,  y + 1);
+  // Precompute lines for easier runtime performance
+  lines_xy.resize(21 * 21);
+  size_t line_count = 0;
+  for (int32_t gx = -10; gx <= 10; ++gx) {
+    for (int32_t gy = -10; gy <= 10; ++gy) {
+      if (!gx) {
+        for (int32_t r = kHoughMinRadius; r <= kHoughMaxRadius; ++r) {
+          lines_xy[line_count].emplace_back(0, r);
+          lines_xy[line_count].emplace_back(0, -r);
+        }
       } else {
-        circle_xy[r_index].emplace_back( x + 1,  y + 1);
-        circle_xy[r_index].emplace_back(-x + 1,  y + 1);
-        circle_xy[r_index].emplace_back( x + 1, -y + 1);
-        circle_xy[r_index].emplace_back(-x + 1, -y + 1);
-      }
+        double a = static_cast<double>(gy) / static_cast<double>(gx);
+        for (int32_t r = kHoughMinRadius; r <= kHoughMaxRadius; ++r) {
+          double aux = static_cast<double>(r) / std::sqrt(a * a + 1);
+          int32_t x = std::round(aux);
+          int32_t y = std::round(a * aux);
 
-      int32_t error1 = std::abs(x * x + (y + 1) * (y + 1) - r * r);
-      int32_t error2 = std::abs((x - 1) * (x - 1) + y * y - r * r);
-      int32_t error3 = std::abs((x - 1) * (x - 1) + (y + 1) * (y + 1) - r * r);
-
-      if (error3 <= error2 && error3 <= error1) {
-        --x;
-        ++y;
-      } else if (error1 <= error2 && error1 <= error3) {
-        ++y;
-      } else {
-        --x;
+          // The +1's are a hacky way to speed up adding the padding
+          // for the matrix so we have to do less edge checks.
+          lines_xy[line_count].emplace_back(x + 1, y + 1);
+          lines_xy[line_count].emplace_back(-x + 1, -y + 1);
+        }
       }
-
-      if (x < 0 || y > r) {
-        break;
-      }
+      ++line_count;
     }
-
-    VLOG(2) << "  Circle radius " << r << " has " 
-        << circle_xy[r_index].size() << " points.";
   }
 
   hough_nms_radius3_ = FLAGS_hough_nms_radius * 
@@ -154,6 +144,7 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
         << "Visualization can be very slow, especially when using low values "
         << "for --show_lines_every_nth.";
     cv::namedWindow("Detected circles", cv::WINDOW_NORMAL);
+    cv::namedWindow("Hough space", cv::WINDOW_NORMAL);
   }
 
   if (!FLAGS_image_topic.empty()) {
@@ -189,32 +180,11 @@ Detector::Detector(const ros::NodeHandle& nh, const ros::NodeHandle& nh_private)
 
 Detector::~Detector() {
   delete hough_space;
+  delete gradient_window;
   delete filter_grid_;
 
   if (FLAGS_map_output) {
     map_file.close();
-  }
-}
-
-// Function to precompute angles, sin and cos values for a vectorized version
-// of the HT. Templated to deal with float and double accuracy.
-template <typename DerivedVec, typename DerivedMat>
-void Detector::initializeSinCosMap(
-    Eigen::EigenBase<DerivedVec>& angles,
-    Eigen::EigenBase<DerivedMat>& sin_cos_map, const int kMinAngle,
-    const int kMaxAngle, const int kNumSteps) {
-  // Computing the angular step size.
-  CHECK_GT(kNumSteps, 1);
-  const double kDeltaTheta = (kMaxAngle - kMinAngle) / (kNumSteps - 1.0);
-  // Resizing the respective output matrizes.
-  angles.derived().resize(kNumSteps, 1);
-  sin_cos_map.derived().resize(kNumSteps, 2);
-
-  // Populating matrizes with angles and sin, cos values.
-  for (int i = 0; i < kNumSteps; i++) {
-    angles.derived()(i) = M_PI * (kMinAngle + i * kDeltaTheta) / 180.0;
-    sin_cos_map.derived()(i, 0) = cos(angles.derived()(i));
-    sin_cos_map.derived()(i, 1) = sin(angles.derived()(i));
   }
 }
 
@@ -311,8 +281,33 @@ void Detector::computeUndistortionMapping() {
   }
 }
 
+inline void Detector::calculateSobel(
+    int32_t x, int32_t y, int32_t* magnitude, int32_t* direction) {
+  int32_t G_x = 
+    -2 * gradient_window[y][x - 1] - gradient_window[y - 1][x - 1]
+    - gradient_window[y + 1][x - 1] + 2 * gradient_window[y][x + 1]
+    + gradient_window[y - 1][x + 1] + gradient_window[y + 1][x + 1];
+
+  int32_t G_y = 
+    -2 * gradient_window[y - 1][x] - gradient_window[y - 1][x - 1]
+    - gradient_window[y - 1][x + 1] + 2 * gradient_window[y + 1][x]
+    + gradient_window[y + 1][x - 1] + gradient_window[y + 1][x + 1];
+
+  if (std::abs(G_x) > 10 || std::abs(G_y) > 10) {
+    LOG(INFO) << G_x << " " << G_y << " " << x << " " << y;
+  }
+
+  G_x = std::min(std::max(G_x, -10), 10);
+  G_y = std::min(std::max(G_y, -10), 10);
+
+  *magnitude = G_x * G_x + G_y * G_y;
+  *direction = (G_y + 10) * 21 + (G_x + 10);
+}
+
 void Detector::stepHoughTransform(
-      const std::vector<point>& points, 
+      const std::vector<point>& points,
+      std::vector<int32_t>* gradient_magnitudes,
+      std::vector<int32_t>* gradient_directions,
       HoughMatrixPtr hough_space, std::vector<circle> *last_maxima,
       bool initialized, std::vector<std::vector<circle>> *maxima_list,
       std::vector<size_t> *maxima_change) {
@@ -321,10 +316,25 @@ void Detector::stepHoughTransform(
   CHECK_NOTNULL(maxima_change);
 
   if (!initialized) {
-    // Start from an empty hough space.
+    // Initialize hough space and gradient computation window to zero
     std::memset(hough_space, 0, sizeof(HoughMatrix));
+    std::memset(gradient_window, 0, sizeof(HoughImage));
 
-    computeFullHoughSpace(FLAGS_hough_window_size - 1, hough_space, points);
+    // Cumulate gradient window
+    for (size_t i = 0; i < FLAGS_hough_window_size; ++i) {
+      ++gradient_window[points[i].y + 1][points[i].x + 1];
+    }
+
+    for (size_t i = 0; i < FLAGS_hough_window_size; ++i) {
+      calculateSobel(
+          points[i].x + 1, points[i].y + 1,
+          &((*gradient_magnitudes)[i]),
+          &((*gradient_directions)[i]));
+    }
+
+    computeFullHoughSpace(
+        FLAGS_hough_window_size - 1, hough_space, points,
+        *gradient_magnitudes, *gradient_directions);
 
     // Initialize first set of maxima.
     maxima_list->emplace_back();
@@ -333,8 +343,50 @@ void Detector::stepHoughTransform(
     maxima_list->emplace_back(*last_maxima);
   }
 
+  for (size_t i = FLAGS_hough_window_size; i < points.size(); ++i) {
+    ++gradient_window[points[i].y + 1][points[i].x + 1];
+    const size_t past_i = i - FLAGS_hough_window_size;
+    --gradient_window[points[past_i].y + 1][points[past_i].x + 1];
+    calculateSobel(
+        points[i].x + 1, points[i].y + 1,
+        &((*gradient_magnitudes)[i]),
+        &((*gradient_directions)[i]));
+  }
+
+  /*for (size_t i = FLAGS_hough_window_size; i < points.size(); i += 100) {
+    cv::Mat vis_frame(
+        cv::Size(camera_resolution_width_, camera_resolution_height_), CV_8UC3,
+            cv::Scalar(255, 255, 255));
+
+    for (size_t j = i - FLAGS_hough_window_size + 1; j <= i; j++) {
+      //if (gradient_magnitude[j] == 0) {
+      //  continue;
+      //}
+
+      vis_frame.at<cv::Vec3b>(points[j].y, points[j].x) =
+            cv::Vec3b(0, 0, 255);
+    }
+
+    for (size_t j = i - FLAGS_hough_window_size + 1; j <= i; j++) {
+      if (gradient_magnitude[j] == 0) {
+        continue;
+      }
+
+      cv::Mat vis_lines = vis_frame.clone();
+      for (const point& p : lines_xy[gradient_direction[j]]) {
+        vis_lines.at<cv::Vec3b>(points[j].y + p.y, points[j].x + p.x) =
+            cv::Vec3b(0, 255, 0);
+      }
+
+      cv::imshow("Gradients", vis_lines);
+      cv::waitKey(500);
+    }
+  }*/
+
   // Perform computations iteratively for the rest of the events.
-  iterativeNMS(points, hough_space, maxima_list, maxima_change);
+  iterativeNMS(
+      points, *gradient_magnitudes, *gradient_directions, hough_space,
+      maxima_list, maxima_change);
 
   // Store last set of maxima to have a starting point for the next message.
   *last_maxima = maxima_list->back();
@@ -372,13 +424,34 @@ void Detector::eventCallback(const dvs_msgs::EventArray::ConstPtr& msg) {
   // the active set of maxima in the Hough Space. These are basically the line
   // detections at each timestep. This whole storage is pre-initialized to
   // make it ready for parallelizing the whole process.
+  std::vector<int32_t> gradient_magnitudes(points.size());
+  std::vector<int32_t> gradient_directions(points.size());
   std::vector<std::vector<circle>> maxima_list;
   std::vector<size_t> maxima_change;
 
+  // Copy over the gradient information here if we have any.
+  if (initialized) {
+    std::move(
+        last_magnitudes.begin(), last_magnitudes.end(),
+        gradient_magnitudes.begin());
+    std::move(
+        last_directions.begin(), last_directions.end(),
+        gradient_directions.begin());
+  }
+
   stepHoughTransform(
-     points, hough_space, &last_maxima, initialized,
-     &maxima_list, &maxima_change);
+     points, &gradient_magnitudes, &gradient_directions, hough_space,
+     &last_maxima, initialized, &maxima_list, &maxima_change);
   initialized = true;
+
+  last_magnitudes.resize(keep);
+  last_directions.resize(keep);
+  std::copy(
+      gradient_magnitudes.end() - keep, gradient_magnitudes.end(),
+      last_magnitudes.begin());
+  std::copy(
+      gradient_directions.end() - keep, gradient_directions.end(),
+      last_directions.begin());
 
   // Dump detected maxima to file
   /*if (FLAGS_map_output) {
@@ -553,7 +626,10 @@ void Detector::visualizeCurrentDetections(
 // Performing itterative Non-Maximum suppression on the current batch of
 // events based on a beginning Hough Space.
 void Detector::iterativeNMS(
-    const std::vector<point>& points, HoughMatrixPtr hough_space, 
+    const std::vector<point>& points,
+    const std::vector<int32_t>& gradient_magnitudes,
+    const std::vector<int32_t>& gradient_directions,
+    HoughMatrixPtr hough_space,
     std::vector<std::vector<circle>>* maxima_list,
     std::vector<size_t> *maxima_change) {
   CHECK_NOTNULL(maxima_list);
@@ -569,10 +645,12 @@ void Detector::iterativeNMS(
         maxima_list->back();
 
     // Incrementing the accumulator cells for the current event.
-    for (size_t r = 1; r < kHoughSpaceRadius - 1; ++r) {
-      for (size_t j = 0; j < circle_xy[r].size(); ++j) {
-        const int32_t x = points[event].x + circle_xy[r][j].x;
-        const int32_t y = points[event].y + circle_xy[r][j].y;
+    if (gradient_magnitudes[event]) {
+      const int32_t line_idx = gradient_directions[event];
+      for (size_t j = 0; j < lines_xy[line_idx].size(); ++j) {
+        const int32_t r = (j >> 1) + 1;
+        const int32_t x = points[event].x + lines_xy[line_idx][j].x;
+        const int32_t y = points[event].y + lines_xy[line_idx][j].y;
         if ((x >= 1) && (x < kHoughSpaceWidth - 1) && 
             (y >= 1) && (y < kHoughSpaceHeight - 1)) {
           ++hough_space[r][y][x];
@@ -582,16 +660,43 @@ void Detector::iterativeNMS(
 
     // Decrement the accumulator cells for the event to be removed.
     const size_t past_event = event - FLAGS_hough_window_size;
-    for (size_t r = 1; r < kHoughSpaceRadius - 1; ++r) {
-      for (size_t j = 0; j < circle_xy[r].size(); ++j) {
-        const int32_t x = points[past_event].x + circle_xy[r][j].x;
-        const int32_t y = points[past_event].y + circle_xy[r][j].y;
+    if (gradient_magnitudes[past_event]) {
+      const int32_t line_idx = gradient_directions[past_event];
+      for (size_t j = 0; j < lines_xy[line_idx].size(); ++j) {
+        const int32_t r = (j >> 1) + 1;
+        const int32_t x = points[past_event].x + lines_xy[line_idx][j].x;
+        const int32_t y = points[past_event].y + lines_xy[line_idx][j].y;
         if ((x >= 1) && (x < kHoughSpaceWidth - 1) && 
             (y >= 1) && (y < kHoughSpaceHeight - 1)) {
           --hough_space[r][y][x];
         }
       }
     }
+
+    /*if (event % 100 == 0) {
+      cv::Mat vis_frame(
+          cv::Size(camera_resolution_width_, camera_resolution_height_),
+          CV_8UC1);
+      double max_hough = 0;
+      for (int32_t m = 1; m < kHoughSpaceHeight - 1; ++m) {
+        for (int32_t n = 1; n < kHoughSpaceWidth - 1; ++n) {
+          if (hough_space[1][m][n] > max_hough) {
+            max_hough = hough_space[1][m][n];
+          }
+        }
+      }
+
+      for (int32_t m = 1; m < kHoughSpaceHeight - 1; ++m) {
+        for (int32_t n = 1; n < kHoughSpaceWidth - 1; ++n) {
+          vis_frame.at<uint8_t>(m - 1, n - 1) = 
+            static_cast<double>(hough_space[1][m][n]) / max_hough * 255.0;
+        }
+      }
+      LOG(INFO) << " Max: " << max_hough;
+
+      cv::imshow("Hough space", vis_frame);
+      cv::waitKey(200);
+    }*/
 
     // The Hough Spaces have been update. Now the iterative NMS has to run and
     // update the list of known maxima. First reset the temporary lists.
@@ -606,10 +711,12 @@ void Detector::iterativeNMS(
     // PHASE 1 - Obtain candidates for global maxima
 
     // For points that got incremented.
-    for (size_t r = 1; r < kHoughSpaceRadius - 1; ++r) {
-      for (size_t j = 0; j < circle_xy[r].size(); ++j) {
-        const int32_t x = points[event].x + circle_xy[r][j].x;
-        const int32_t y = points[event].y + circle_xy[r][j].y;
+    if (gradient_magnitudes[event]) {
+      const int32_t line_idx = gradient_directions[event];
+      for (size_t j = 0; j < lines_xy[line_idx].size(); ++j) {
+        const int32_t r = (j >> 1) + 1;
+        const int32_t x = points[event].x + lines_xy[line_idx][j].x;
+        const int32_t y = points[event].y + lines_xy[line_idx][j].y;
         if ((x <= 0) || (x >= kHoughSpaceWidth - 1) ||
             (y <= 0) || (y >= kHoughSpaceHeight - 1)) {
           continue;
@@ -681,10 +788,12 @@ void Detector::iterativeNMS(
     }
 
     // For accumulator cells that got decremented.
-    for (size_t r = 1; r < kHoughSpaceRadius - 1; ++r) {
-      for (size_t j = 0; j < circle_xy[r].size(); ++j) {
-        const int32_t x = points[past_event].x + circle_xy[r][j].x;
-        const int32_t y = points[past_event].y + circle_xy[r][j].y;
+    if (gradient_magnitudes[past_event]) {
+      const int32_t line_idx = gradient_directions[past_event];
+      for (size_t j = 0; j < lines_xy[line_idx].size(); ++j) {
+        const int32_t r = (j >> 1) + 1;
+        const int32_t x = points[past_event].x + lines_xy[line_idx][j].x;
+        const int32_t y = points[past_event].y + lines_xy[line_idx][j].y;
         if ((x <= 0) || (x >= kHoughSpaceWidth - 1) ||
             (y <= 0) || (y >= kHoughSpaceHeight - 1)) {
           continue;
@@ -817,7 +926,8 @@ void Detector::iterativeNMS(
       std::vector<circle> maxima_debug;
 
       std::memset(hough_space_debug, 0, sizeof(HoughMatrix));
-      computeFullHoughSpace(event, hough_space_debug, points);
+      computeFullHoughSpace(event, hough_space_debug, points,
+          gradient_magnitudes, gradient_directions);
       computeFullNMS(hough_space_debug, &maxima_debug);
 
       std::stable_sort(maxima_debug.begin(), maxima_debug.end());
@@ -849,31 +959,6 @@ void Detector::iterativeNMS(
       }
 
       if (different) {
-        // Incrementing the accumulator cells for the current event.
-        for (size_t r = 1; r < kHoughSpaceRadius - 1; ++r) {
-          for (size_t j = 0; j < circle_xy[r].size(); ++j) {
-            const int32_t x = points[event].x + circle_xy[r][j].x;
-            const int32_t y = points[event].y + circle_xy[r][j].y;
-            if ((x >= 1) && (x < kHoughSpaceWidth - 1) && 
-                (y >= 1) && (y < kHoughSpaceHeight - 1)) {
-              LOG(INFO) << " inc: " << r << " " << x << " " << y;
-            }
-          }
-        }
-
-        // Decrement the accumulator cells for the event to be removed.
-        const size_t past_event = event - FLAGS_hough_window_size;
-        for (size_t r = 1; r < kHoughSpaceRadius - 1; ++r) {
-          for (size_t j = 0; j < circle_xy[r].size(); ++j) {
-            const int32_t x = points[past_event].x + circle_xy[r][j].x;
-            const int32_t y = points[past_event].y + circle_xy[r][j].y;
-            if ((x >= 1) && (x < kHoughSpaceWidth - 1) && 
-                (y >= 1) && (y < kHoughSpaceHeight - 1)) {
-              LOG(INFO) << " dec: " << r << " " << x << " " << y;
-            }
-          }
-        }
-
         for (size_t j = 0; j < maxima_debug.size(); ++j) {
           LOG(INFO) << "houghspace: " << maxima_debug[j].r << " "
               << maxima_debug[j].x << " " << maxima_debug[j].y;
@@ -941,20 +1026,26 @@ void Detector::computeFullNMS(
 // Computing a full Hough Space based on a current set of events and their
 // respective Hough parameters.
 void Detector::computeFullHoughSpace(
-    size_t index, HoughMatrixPtr hough_space, const std::vector<point>& points) {
+    size_t index, HoughMatrixPtr hough_space, const std::vector<point>& points,
+    const std::vector<int32_t>& gradient_magnitudes,
+    const std::vector<int32_t>& gradient_directions) {
   CHECK_GE(index, FLAGS_hough_window_size - 1);
 
   // Looping over all events that have an influence on the current total
   // Hough space (i.e. fall in the detection window).
   for (size_t i = index - FLAGS_hough_window_size + 1; i <= index; ++i) {
-    for (size_t r = 1; r < kHoughSpaceRadius - 1; ++r) {
-      for (size_t j = 0; j < circle_xy[r].size(); ++j) {
-        const int32_t x = points[i].x + circle_xy[r][j].x;
-        const int32_t y = points[i].y + circle_xy[r][j].y;
-        if ((x >= 1) && (x < kHoughSpaceWidth - 1) && 
-            (y >= 1) && (y < kHoughSpaceHeight - 1)) {
-          ++hough_space[r][y][x];
-        }
+    if (!gradient_magnitudes[i]) {
+      continue;
+    }
+
+    const int32_t line_idx = gradient_directions[i];
+    for (size_t j = 0; j < lines_xy[line_idx].size(); ++j) {
+      const int32_t r = (j >> 1) + 1;
+      const int32_t x = points[i].x + lines_xy[line_idx][j].x;
+      const int32_t y = points[i].y + lines_xy[line_idx][j].y;
+      if ((x >= 1) && (x < kHoughSpaceWidth - 1) && 
+          (y >= 1) && (y < kHoughSpaceHeight - 1)) {
+        ++hough_space[r][y][x];
       }
     }
   }
@@ -1099,7 +1190,7 @@ void Detector::applySuppressionRadius(
 }
 
 // Check if the center value is a maxima.
-bool Detector::isLocalMaxima(
+inline bool Detector::isLocalMaxima(
     HoughMatrixPtr hough_space, int32_t r, int32_t y, int32_t x) {
   // Loop over the 8-connected neighborhood.
   for (int32_t m = r - 1; m <= r + 1; ++m) {
